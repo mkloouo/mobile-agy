@@ -77,15 +77,15 @@ npm run dev
 
 | Command | Description |
 | :--- | :--- |
-| `/new [title]` | Create a new topic and start a fresh conversation |
-| `/chats` | Browse recent Antigravity conversations from history and assign to a topic |
-| `/projects` | List available workspace directories with inline selection buttons |
-| `/resume <id>` | Attach an existing Antigravity conversation ID to the current topic |
-| `/bind <workspace>` | Bind current topic to a specific workspace directory |
-| `/topic <name>` | Rename the current Telegram forum topic |
-| `/stop` | Immediately interrupt and terminate the running agent turn |
-| `/status` | View current workspace directory, active conversation UUID, and task state |
-| `/help` | Display quickstart guide and available commands |
+| `/agy_new [title]` | Create a new topic and start a fresh conversation |
+| `/agy_chats [query]` | Browse recent Antigravity conversations with pagination/search and assign to a topic |
+| `/agy_projects` | List available workspace directories with inline selection buttons |
+| `/agy_resume <id>` | Attach an existing Antigravity conversation ID to the current topic |
+| `/agy_bind <workspace>` | Bind current topic to a specific workspace directory |
+| `/agy_topic <name>` | Rename the current Telegram forum topic |
+| `/agy_stop` | Immediately interrupt and terminate the running agent turn or warm process |
+| `/agy_status` | View current workspace directory, active conversation UUID, and task state |
+| `/agy_help` | Display quickstart guide and available commands |
 
 ---
 

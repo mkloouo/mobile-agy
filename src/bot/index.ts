@@ -17,6 +17,19 @@ export function createBot(config: AppConfig) {
     const convService = new ConversationService();
     const agyService = new AgyStreamService(config.idleTimeoutSeconds);
 
+    // Register /agy_* commands with Telegram so they appear in autocomplete menu
+    bot.api.setMyCommands([
+        { command: 'agy_new', description: 'Create a new topic & conversation' },
+        { command: 'agy_chats', description: 'Browse and assign existing chats' },
+        { command: 'agy_projects', description: 'Select a project workspace' },
+        { command: 'agy_stop', description: 'Stop current running task' },
+        { command: 'agy_status', description: 'Show session and execution status' },
+        { command: 'agy_resume', description: 'Attach a conversation UUID' },
+        { command: 'agy_bind', description: 'Bind topic to a workspace folder' },
+        { command: 'agy_topic', description: 'Rename current topic' },
+        { command: 'agy_help', description: 'Show guide and commands' },
+    ]).catch((err) => logger.warn('[Bot] Failed to set bot commands menu:', err.message));
+
     // In-memory cache for recent conversations to support callback buttons
     const convCache = new Map<string, ConversationSummary>();
 
@@ -76,7 +89,7 @@ export function createBot(config: AppConfig) {
     }
 
     /**
-     * Helper to render /chats keyboard with pagination
+     * Helper to render /agy_chats keyboard with pagination
      */
     function buildChatsUI(result: SearchResult, query: string): { text: string; keyboard: InlineKeyboard } {
         const keyboard = new InlineKeyboard();
@@ -126,8 +139,8 @@ export function createBot(config: AppConfig) {
         return { text: titleHeader, keyboard };
     }
 
-    // Command: /start or /help
-    bot.command(['start', 'help'], async (ctx) => {
+    // Command: /agy_help, /help, /start, /agy_start
+    bot.command(['agy_help', 'help', 'start', 'agy_start'], async (ctx) => {
         const channelKey = getChannelKey(ctx);
         const ws = resolveWorkspace(channelKey);
         const session = db.getSession(channelKey);
@@ -139,14 +152,15 @@ export function createBot(config: AppConfig) {
 <b>Active Conversation:</b> <code>${session?.conversationId || 'None (New)'}</code>
 
 <b>Commands:</b>
-• <code>/new &lt;title&gt;</code> - Create a new topic & conversation
-• <code>/chats [query]</code> - Browse past Antigravity chats with pagination/search
-• <code>/projects</code> - View and select project workspace (creates a topic)
-• <code>/resume &lt;id&gt;</code> - Attach a specific conversation ID to this topic
-• <code>/bind &lt;workspace&gt;</code> - Bind this topic to a workspace folder
-• <code>/topic &lt;name&gt;</code> - Rename current topic
-• <code>/stop</code> - Stop current running task
-• <code>/status</code> - Show execution and session info
+• <code>/agy_new &lt;title&gt;</code> - Create a new topic & conversation
+• <code>/agy_chats [query]</code> - Browse past Antigravity chats with pagination/search
+• <code>/agy_projects</code> - View and select project workspace (creates a topic)
+• <code>/agy_resume &lt;id&gt;</code> - Attach a specific conversation ID to this topic
+• <code>/agy_bind &lt;workspace&gt;</code> - Bind this topic to a workspace folder
+• <code>/agy_topic &lt;name&gt;</code> - Rename current topic
+• <code>/agy_stop</code> - Stop current running task
+• <code>/agy_status</code> - Show execution and session info
+• <code>/agy_help</code> - Show this guide
 
 <i>Note: Chatting in General is disabled. Every conversation must be in its own topic.</i>
         `.trim();
@@ -154,8 +168,8 @@ export function createBot(config: AppConfig) {
         await ctx.reply(helpText, { parse_mode: 'HTML' });
     });
 
-    // Command: /status
-    bot.command('status', async (ctx) => {
+    // Command: /agy_status, /status
+    bot.command(['agy_status', 'status'], async (ctx) => {
         const channelKey = getChannelKey(ctx);
         const ws = resolveWorkspace(channelKey);
         const session = db.getSession(channelKey);
@@ -165,25 +179,25 @@ export function createBot(config: AppConfig) {
 <b>📊 Session Status</b>
 • <b>Workspace:</b> <code>${ws}</code>
 • <b>Conversation:</b> <code>${session?.conversationId || 'Fresh'}</code>
-• <b>Status:</b> ${isRunning ? '⚙️ Running task' : '💤 Idle'}
+• <b>Status:</b> ${isRunning ? '⚙️ Running task' : '💤 Idle (warm process)'}
         `.trim();
 
         await ctx.reply(statusMsg, { parse_mode: 'HTML' });
     });
 
-    // Command: /stop
-    bot.command('stop', async (ctx) => {
+    // Command: /agy_stop, /stop
+    bot.command(['agy_stop', 'stop'], async (ctx) => {
         const channelKey = getChannelKey(ctx);
         const stopped = agyService.stopSession(channelKey);
         if (stopped) {
-            await ctx.reply('🛑 Stopped active task.');
+            await ctx.reply('🛑 Stopped active task / closed warm process.');
         } else {
             await ctx.reply('No task is currently running in this topic.');
         }
     });
 
-    // Command: /new [title] - Create a new topic & conversation
-    bot.command('new', async (ctx) => {
+    // Command: /agy_new, /new [title] - Create a new topic & conversation
+    bot.command(['agy_new', 'new'], async (ctx) => {
         const rawTitle = ctx.match?.trim();
         const title = rawTitle || `Chat ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
         const currentChannelKey = getChannelKey(ctx);
@@ -216,8 +230,8 @@ export function createBot(config: AppConfig) {
         }
     });
 
-    // Command: /projects or /project
-    bot.command(['projects', 'project'], async (ctx) => {
+    // Command: /agy_projects, /agy_project, /projects, /project
+    bot.command(['agy_projects', 'agy_project', 'projects', 'project'], async (ctx) => {
         const workspaces = workspaceService.scanWorkspaces();
         if (workspaces.length === 0) {
             return ctx.reply(`No subdirectories found in <code>${workspaceService.getBaseDir()}</code>`, {
@@ -238,8 +252,8 @@ export function createBot(config: AppConfig) {
         });
     });
 
-    // Command: /chats [query] - List recent Antigravity conversations with pagination
-    bot.command('chats', async (ctx) => {
+    // Command: /agy_chats, /chats [query] - List recent Antigravity conversations with pagination
+    bot.command(['agy_chats', 'chats'], async (ctx) => {
         const query = ctx.match?.trim() || '';
         const searchResult = convService.search(query, 0, 5);
         const { text, keyboard } = buildChatsUI(searchResult, query);
@@ -264,11 +278,11 @@ export function createBot(config: AppConfig) {
         });
     });
 
-    // Command: /resume <conversation_id>
-    bot.command('resume', async (ctx) => {
+    // Command: /agy_resume, /resume <conversation_id>
+    bot.command(['agy_resume', 'resume'], async (ctx) => {
         const convId = ctx.match?.trim();
         if (!convId) {
-            return ctx.reply('Usage: <code>/resume &lt;conversation-uuid&gt;</code>', { parse_mode: 'HTML' });
+            return ctx.reply('Usage: <code>/agy_resume &lt;conversation-uuid&gt;</code>', { parse_mode: 'HTML' });
         }
 
         const threadId = ctx.message?.message_thread_id;
@@ -302,11 +316,11 @@ export function createBot(config: AppConfig) {
         });
     });
 
-    // Command: /bind <workspace>
-    bot.command('bind', async (ctx) => {
+    // Command: /agy_bind, /bind <workspace>
+    bot.command(['agy_bind', 'bind'], async (ctx) => {
         const wsName = ctx.match?.trim();
         if (!wsName) {
-            return ctx.reply('Usage: <code>/bind &lt;workspace_folder&gt;</code>', { parse_mode: 'HTML' });
+            return ctx.reply('Usage: <code>/agy_bind &lt;workspace_folder&gt;</code>', { parse_mode: 'HTML' });
         }
 
         try {
@@ -323,12 +337,12 @@ export function createBot(config: AppConfig) {
         }
     });
 
-    // Command: /topic <new title>
-    bot.command('topic', async (ctx) => {
+    // Command: /agy_topic, /topic <new title>
+    bot.command(['agy_topic', 'topic'], async (ctx) => {
         const newTitle = ctx.match?.trim();
         const threadId = ctx.message?.message_thread_id;
         if (!newTitle || !threadId || threadId === 1 || !ctx.chat) {
-            return ctx.reply('Usage: <code>/topic &lt;new title&gt;</code> inside a topic.', { parse_mode: 'HTML' });
+            return ctx.reply('Usage: <code>/agy_topic &lt;new title&gt;</code> inside a topic.', { parse_mode: 'HTML' });
         }
 
         await topicManager.renameTopic(ctx.chat.id, threadId, newTitle);
@@ -494,9 +508,9 @@ export function createBot(config: AppConfig) {
             await ctx.reply(
                 '⚠️ <b>Chatting in General is disabled.</b>\n\n' +
                 'Every conversation must have its own topic:\n' +
-                '• <code>/new &lt;title&gt;</code> - Create a new topic & chat\n' +
-                '• <code>/projects</code> - Pick a project workspace\n' +
-                '• <code>/chats</code> - Assign an existing chat to a topic',
+                '• <code>/agy_new &lt;title&gt;</code> - Create a new topic & chat\n' +
+                '• <code>/agy_projects</code> - Pick a project workspace\n' +
+                '• <code>/agy_chats</code> - Assign an existing chat to a topic',
                 { parse_mode: 'HTML', reply_markup: keyboard }
             );
             return;
@@ -524,7 +538,7 @@ export function createBot(config: AppConfig) {
         if (userPrompt.startsWith('/')) {
             const cmd = userPrompt.split(/[\s@]/)[0];
             await ctx.reply(
-                `❓ Unknown command: <code>${escapeHtml(cmd)}</code>\n\nUse /help to see all available commands.`,
+                `❓ Unknown command: <code>${escapeHtml(cmd)}</code>\n\nUse /agy_help to see all available commands.`,
                 { parse_mode: 'HTML', message_thread_id: threadId }
             );
             return;
@@ -533,7 +547,7 @@ export function createBot(config: AppConfig) {
         const channelKey = getChannelKey(ctx);
 
         if (agyService.isBusy(channelKey)) {
-            await ctx.reply('⏳ Antigravity is busy running another task in this conversation. Use /stop to cancel it.', {
+            await ctx.reply('⏳ Antigravity is busy running another task in this conversation. Use /agy_stop to cancel it.', {
                 message_thread_id: threadId,
             });
             return;
