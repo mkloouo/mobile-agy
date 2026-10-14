@@ -7,8 +7,39 @@
     "mobile-agy": "./dist/bin/cli.js",
     "agy-telegram": "./dist/bin/cli.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "author": "Mykola Odnosumov",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:mkloouo/mobile-agy.git"
+  },
+  "homepage": "https://github.com/mkloouo/mobile-agy#readme",
+  "bugs": {
+    "url": "https://github.com/mkloouo/mobile-agy/issues"
+  },
+  "keywords": [
+    "antigravity",
+    "agy",
+    "telegram",
+    "ai",
+    "cli",
+    "headless",
+    "remote",
+    "mobile",
+    "llm",
+    "agent"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "tsc && chmod +x dist/bin/cli.js",
+    "prepack": "npm run build",
     "start": "node dist/bin/cli.js start",
     "dev": "ts-node-dev --respawn src/bin/cli.ts start"
   },
