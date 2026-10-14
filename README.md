@@ -8,12 +8,12 @@ Unlike desktop CDP-based remotes, `mobile-friendly-agy` connects directly to the
 
 ## Features
 
+- **Automatic Topic Per Conversation**: In forum-enabled supergroups, every new prompt outside a topic, every `/new [title]`, and every `/projects` selection automatically creates a dedicated Telegram Forum Topic.
 - **Native Headless Streaming**: Uses `agy --input-format stream-json --output-format stream-json` directly on your Mac.
 - **Zero API Key Hassle**: Uses your existing logged-in Antigravity account, plugins, MCP servers, and custom skills automatically.
-- **Telegram Forum Topics**: Each topic in a supergroup maps to an isolated session and workspace.
 - **Live Output Streaming**: Throttled live text editing in Telegram with emoji status indicators for tool executions (e.g. `⚙️ Executing: run_command`).
-- **Project Switching**: Switch between projects in your workspace with `/projects` via interactive inline buttons.
-- **Multi-turn Sessions**: Retains conversation history across turns and recovers seamlessly across restarts.
+- **Project Switching**: Switch between projects in your workspace with `/projects` via interactive inline buttons (auto-creates a project topic).
+- **Multi-turn Sessions**: Retains conversation history across turns within each topic and recovers seamlessly across restarts.
 - **Media Support**: Send screenshots and photos from your mobile phone—the bot downloads them to a local temporary path and attaches them to the prompt.
 - **Task Control**: Abort running tasks on the fly with `/stop`.
 - **Security**: Whitelist protection via `ALLOWED_USER_IDS`.
@@ -66,8 +66,12 @@ npm run build && npm start
 
 | Command | Description |
 | :--- | :--- |
+| `/new [title]` | Create a new topic and start a fresh conversation |
+| `/chats` | Browse recent Antigravity conversations from history and assign to a topic |
 | `/projects` | List available workspace directories with inline selection buttons |
-| `/new` | Start a fresh conversation in the current topic / chat |
+| `/resume <id>` | Attach an existing Antigravity conversation ID to the current topic |
+| `/bind <workspace>` | Bind current topic to a specific workspace directory |
+| `/topic <name>` | Rename the current Telegram forum topic |
 | `/stop` | Immediately interrupt and terminate the running agent turn |
 | `/status` | View current workspace directory, active conversation UUID, and task state |
 | `/help` | Display quickstart guide and available commands |

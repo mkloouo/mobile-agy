@@ -3,8 +3,9 @@ import { AppConfig } from '../utils/config';
 import { DatabaseManager } from '../database/db';
 import { WorkspaceService } from '../services/workspaceService';
 import { TelegramTopicManager } from '../services/telegramTopicManager';
+import { ConversationService, ConversationSummary } from '../services/conversationService';
 import { AgyStreamService } from '../services/agyStreamService';
-import { formatForTelegram, splitTelegramHtml } from '../utils/telegramFormatter';
+import { escapeHtml, formatForTelegram, splitTelegramHtml } from '../utils/telegramFormatter';
 import { downloadTelegramPhoto } from '../utils/imageHandler';
 import { logger } from '../utils/logger';
 
@@ -12,7 +13,12 @@ export function createBot(config: AppConfig) {
     const bot = new Bot(config.telegramBotToken);
     const db = new DatabaseManager(config.dbPath);
     const workspaceService = new WorkspaceService(config.workspaceBaseDir);
+    const topicManager = new TelegramTopicManager(bot.api);
+    const convService = new ConversationService();
     const agyService = new AgyStreamService();
+
+    // In-memory cache for recent conversations to support callback buttons
+    const convCache = new Map<string, ConversationSummary>();
 
     // Whitelist Authorization Middleware
     bot.use(async (ctx, next) => {
@@ -32,9 +38,9 @@ export function createBot(config: AppConfig) {
     /**
      * Resolve the channel key (combines chatId + topicId)
      */
-    function getChannelKey(ctx: Context): string {
+    function getChannelKey(ctx: Context, overrideThreadId?: number): string {
         const chatId = ctx.chat?.id;
-        const threadId = ctx.message?.message_thread_id || (ctx.callbackQuery?.message as any)?.message_thread_id;
+        const threadId = overrideThreadId ?? (ctx.message?.message_thread_id || (ctx.callbackQuery?.message as any)?.message_thread_id);
         return threadId ? `${chatId}:${threadId}` : `${chatId}`;
     }
 
@@ -46,8 +52,22 @@ export function createBot(config: AppConfig) {
         if (boundPath && workspaceService.exists(boundPath)) {
             return workspaceService.getWorkspacePath(boundPath);
         }
-        // Default to workspace base directory
         return workspaceService.getBaseDir();
+    }
+
+    /**
+     * Try to create a topic in supergroup if topics are enabled
+     */
+    async function createConversationTopic(ctx: Context, title: string): Promise<number | undefined> {
+        if (!config.useTopics || !ctx.chat || ctx.chat.type !== 'supergroup') {
+            return undefined;
+        }
+        try {
+            return await topicManager.createConversationTopic(ctx.chat.id, title);
+        } catch (err: any) {
+            logger.warn(`[Bot] Could not create topic (check bot admin 'can_manage_topics' permission):`, err?.message || err);
+            return undefined;
+        }
     }
 
     // Command: /start or /help
@@ -63,13 +83,16 @@ export function createBot(config: AppConfig) {
 <b>Active Conversation:</b> <code>${session?.conversationId || 'None (New)'}</code>
 
 <b>Commands:</b>
-/projects - View and switch project workspaces
-/new - Start a fresh conversation in this topic
-/stop - Stop current running task
-/status - Show execution status and conversation info
-/help - Show this guide
+• <code>/new &lt;title&gt;</code> - Create a new topic & conversation
+• <code>/chats</code> - Browse and assign an existing chat to a topic
+• <code>/projects</code> - View and select project workspace (creates a topic)
+• <code>/resume &lt;id&gt;</code> - Attach a specific conversation ID to this topic
+• <code>/bind &lt;workspace&gt;</code> - Bind this topic to a workspace folder
+• <code>/topic &lt;name&gt;</code> - Rename current topic
+• <code>/stop</code> - Stop current running task
+• <code>/status</code> - Show execution and session info
 
-Send any text or screenshot to prompt Antigravity!
+<i>Note: Chatting directly in the General chat is disabled. All chats must have a topic.</i>
         `.trim();
 
         await ctx.reply(helpText, { parse_mode: 'HTML' });
@@ -103,12 +126,38 @@ Send any text or screenshot to prompt Antigravity!
         }
     });
 
-    // Command: /new
+    // Command: /new [title] - Create a new topic & conversation
     bot.command('new', async (ctx) => {
-        const channelKey = getChannelKey(ctx);
-        agyService.stopSession(channelKey);
-        db.deleteSession(channelKey);
-        await ctx.reply('✨ Started a fresh conversation. Next message will create a new session.');
+        const rawTitle = ctx.match?.trim();
+        const title = rawTitle || `Chat ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        const currentChannelKey = getChannelKey(ctx);
+        const currentWorkspace = resolveWorkspace(currentChannelKey);
+
+        agyService.stopSession(currentChannelKey);
+
+        const newTopicId = await createConversationTopic(ctx, title);
+
+        if (newTopicId && ctx.chat) {
+            const newChannelKey = `${ctx.chat.id}:${newTopicId}`;
+
+            const boundWs = db.getWorkspaceBinding(currentChannelKey);
+            if (boundWs) {
+                db.bindWorkspace(newChannelKey, boundWs, newTopicId);
+            }
+
+            await ctx.reply(`👉 Created conversation topic: <b>${escapeHtml(title)}</b>`, {
+                parse_mode: 'HTML',
+            });
+
+            await ctx.api.sendMessage(
+                ctx.chat.id,
+                `✨ <b>New Conversation</b>\n📁 <b>Workspace:</b> <code>${currentWorkspace}</code>\n\nSend a message here to start chatting!`,
+                { parse_mode: 'HTML', message_thread_id: newTopicId }
+            );
+        } else {
+            db.deleteSession(currentChannelKey);
+            await ctx.reply('✨ Started a fresh conversation. Next message will create a new session.');
+        }
     });
 
     // Command: /projects
@@ -127,41 +176,242 @@ Send any text or screenshot to prompt Antigravity!
             if (i % 2 === 1) keyboard.row();
         }
 
-        await ctx.reply('<b>Select a workspace:</b>', {
+        await ctx.reply('<b>Select a workspace to start a topic:</b>', {
             reply_markup: keyboard,
             parse_mode: 'HTML',
         });
     });
 
-    // Handle project selection callback
-    bot.callbackQuery(/^select_ws:(.+)$/, async (ctx) => {
-        const wsName = ctx.match[1];
+    // Command: /chats - List recent Antigravity conversations to assign to a topic
+    bot.command('chats', async (ctx) => {
+        const recents = convService.listRecent(6);
+        if (recents.length === 0) {
+            return ctx.reply('No existing Antigravity conversations found in history.');
+        }
+
+        const keyboard = new InlineKeyboard();
+        for (const item of recents) {
+            convCache.set(item.conversationId, item);
+            const shortId = item.conversationId.slice(0, 8);
+            const label = item.title.length > 25 ? `${item.title.slice(0, 22)}...` : item.title;
+            keyboard.text(`💬 ${label}`, `assign_chat:${shortId}`).row();
+        }
+
+        await ctx.reply('<b>Select an existing conversation to assign to a topic:</b>', {
+            reply_markup: keyboard,
+            parse_mode: 'HTML',
+        });
+    });
+
+    // Command: /resume <conversation_id>
+    bot.command('resume', async (ctx) => {
+        const convId = ctx.match?.trim();
+        if (!convId) {
+            return ctx.reply('Usage: <code>/resume &lt;conversation-uuid&gt;</code>', { parse_mode: 'HTML' });
+        }
+
+        const threadId = ctx.message?.message_thread_id;
+        const isGeneral = !threadId || threadId === 1;
+
+        if (ctx.chat?.type === 'supergroup' && isGeneral) {
+            // If in General, create a topic for it!
+            const summary = convService.getSummary(convId);
+            const title = summary?.title || `Resume ${convId.slice(0, 8)}`;
+            const wsPath = summary?.workspacePath || workspaceService.getBaseDir();
+
+            const newTopicId = await createConversationTopic(ctx, title);
+            if (newTopicId && ctx.chat) {
+                const newKey = `${ctx.chat.id}:${newTopicId}`;
+                db.saveSession(newKey, wsPath, convId, newTopicId);
+
+                await ctx.reply(`👉 Assigned chat to new topic: <b>${escapeHtml(title)}</b>`, { parse_mode: 'HTML' });
+                await ctx.api.sendMessage(
+                    ctx.chat.id,
+                    `🔄 <b>Assigned Conversation:</b> <i>${escapeHtml(title)}</i>\n<code>${convId}</code>\n<b>Workspace:</b> <code>${wsPath}</code>\n\nSend a message here to resume!`,
+                    { parse_mode: 'HTML', message_thread_id: newTopicId }
+                );
+                return;
+            }
+        }
+
+        // Inside a topic or DM
         const channelKey = getChannelKey(ctx);
+        const ws = resolveWorkspace(channelKey);
+        db.saveSession(channelKey, ws, convId, threadId);
+        await ctx.reply(`✅ Linked this topic to conversation <code>${convId}</code>. Send a prompt to continue.`, {
+            parse_mode: 'HTML',
+        });
+    });
+
+    // Command: /bind <workspace>
+    bot.command('bind', async (ctx) => {
+        const wsName = ctx.match?.trim();
+        if (!wsName) {
+            return ctx.reply('Usage: <code>/bind &lt;workspace_folder&gt;</code>', { parse_mode: 'HTML' });
+        }
 
         try {
             const fullPath = workspaceService.resolveWorkspace(wsName);
-            const threadId = (ctx.callbackQuery.message as any)?.message_thread_id;
+            const channelKey = getChannelKey(ctx);
+            const threadId = ctx.message?.message_thread_id;
 
             db.bindWorkspace(channelKey, wsName, threadId);
-            db.deleteSession(channelKey); // Reset conversation for new workspace
+            await ctx.reply(`✅ Bound this topic to workspace: <b>${escapeHtml(wsName)}</b>\n<code>${fullPath}</code>`, {
+                parse_mode: 'HTML',
+            });
+        } catch (err: any) {
+            await ctx.reply(`❌ Error binding workspace: ${err.message}`);
+        }
+    });
 
-            await ctx.answerCallbackQuery({ text: `Switched to ${wsName}` });
-            await ctx.editMessageText(
-                `✅ Switched to workspace: <b>${wsName}</b>\nPath: <code>${fullPath}</code>\n\nStarted a fresh conversation. Send a message to begin.`,
-                { parse_mode: 'HTML' }
-            );
+    // Command: /topic <new title>
+    bot.command('topic', async (ctx) => {
+        const newTitle = ctx.match?.trim();
+        const threadId = ctx.message?.message_thread_id;
+        if (!newTitle || !threadId || threadId === 1 || !ctx.chat) {
+            return ctx.reply('Usage: <code>/topic &lt;new title&gt;</code> inside a topic.', { parse_mode: 'HTML' });
+        }
+
+        await topicManager.renameTopic(ctx.chat.id, threadId, newTitle);
+        await ctx.reply(`✅ Renamed topic to: <b>${escapeHtml(newTitle)}</b>`, { parse_mode: 'HTML' });
+    });
+
+    // Handle project selection callback
+    bot.callbackQuery(/^select_ws:(.+)$/, async (ctx) => {
+        const wsName = ctx.match[1];
+        const chatId = ctx.chat?.id;
+        if (!chatId) return;
+
+        try {
+            const fullPath = workspaceService.resolveWorkspace(wsName);
+            let newTopicId: number | undefined;
+
+            if (config.useTopics && ctx.chat?.type === 'supergroup') {
+                try {
+                    newTopicId = await topicManager.createProjectTopic(chatId, wsName);
+                } catch (err: any) {
+                    logger.warn(`[ProjectSelect] Could not create topic for ${wsName}:`, err?.message || err);
+                }
+            }
+
+            if (newTopicId) {
+                const newChannelKey = `${chatId}:${newTopicId}`;
+                db.bindWorkspace(newChannelKey, wsName, newTopicId);
+
+                await ctx.answerCallbackQuery({ text: `Created topic 📁 ${wsName}` });
+                await ctx.editMessageText(
+                    `✅ Created topic: <b>📁 ${escapeHtml(wsName)}</b>\nPath: <code>${fullPath}</code>`,
+                    { parse_mode: 'HTML' }
+                );
+
+                await ctx.api.sendMessage(
+                    chatId,
+                    `📁 <b>Workspace: ${escapeHtml(wsName)}</b>\n<code>${fullPath}</code>\n\nSend messages here to interact with this project.`,
+                    { parse_mode: 'HTML', message_thread_id: newTopicId }
+                );
+            } else {
+                const channelKey = getChannelKey(ctx);
+                db.bindWorkspace(channelKey, wsName);
+                db.deleteSession(channelKey);
+
+                await ctx.answerCallbackQuery({ text: `Switched to ${wsName}` });
+                await ctx.editMessageText(
+                    `✅ Switched to workspace: <b>${wsName}</b>\nPath: <code>${fullPath}</code>\n\nStarted a fresh conversation. Send a message to begin.`,
+                    { parse_mode: 'HTML' }
+                );
+            }
         } catch (err: any) {
             await ctx.answerCallbackQuery({ text: 'Error switching workspace' });
             await ctx.reply(`Failed to switch: ${err.message}`);
         }
     });
 
+    // Handle assign existing chat callback
+    bot.callbackQuery(/^assign_chat:(.+)$/, async (ctx) => {
+        const shortId = ctx.match[1];
+        const chatId = ctx.chat?.id;
+        if (!chatId) return;
+
+        // Find from cache or service
+        let match: ConversationSummary | undefined;
+        for (const [id, summary] of convCache.entries()) {
+            if (id.startsWith(shortId)) {
+                match = summary;
+                break;
+            }
+        }
+
+        if (!match) {
+            const recents = convService.listRecent(10);
+            match = recents.find((r) => r.conversationId.startsWith(shortId));
+        }
+
+        if (!match) {
+            await ctx.answerCallbackQuery({ text: 'Conversation not found' });
+            return;
+        }
+
+        const threadId = (ctx.callbackQuery.message as any)?.message_thread_id;
+        const isGeneral = !threadId || threadId === 1;
+
+        if (config.useTopics && ctx.chat?.type === 'supergroup' && isGeneral) {
+            // Create a dedicated topic for this existing conversation
+            try {
+                const topicTitle = match.title || `Chat ${shortId}`;
+                const newTopicId = await topicManager.createConversationTopic(chatId, topicTitle);
+                const newKey = `${chatId}:${newTopicId}`;
+
+                const wsPath = match.workspacePath || workspaceService.getBaseDir();
+                db.saveSession(newKey, wsPath, match.conversationId, newTopicId);
+
+                await ctx.answerCallbackQuery({ text: `Created topic for ${match.title}` });
+                await ctx.editMessageText(
+                    `✅ Assigned conversation <b>${escapeHtml(match.title)}</b> to new topic: <b>💬 ${escapeHtml(topicTitle)}</b>`,
+                    { parse_mode: 'HTML' }
+                );
+
+                await ctx.api.sendMessage(
+                    chatId,
+                    `🔄 <b>Assigned Conversation:</b> <i>${escapeHtml(match.title)}</i>\n<code>${match.conversationId}</code>\n📁 <b>Workspace:</b> <code>${wsPath}</code>\n\nSend a prompt here to continue where you left off!`,
+                    { parse_mode: 'HTML', message_thread_id: newTopicId }
+                );
+            } catch (err: any) {
+                await ctx.answerCallbackQuery({ text: 'Error creating topic' });
+                await ctx.reply(`Failed to create topic: ${err.message}`);
+            }
+        } else {
+            // Already inside a topic (or DM): attach to current topic
+            const channelKey = getChannelKey(ctx);
+            const wsPath = match.workspacePath || resolveWorkspace(channelKey);
+            db.saveSession(channelKey, wsPath, match.conversationId, threadId);
+
+            await ctx.answerCallbackQuery({ text: `Attached ${match.title}` });
+            await ctx.editMessageText(
+                `🔄 <b>Assigned Conversation:</b> <i>${escapeHtml(match.title)}</i>\n<code>${match.conversationId}</code>\n📁 <b>Workspace:</b> <code>${wsPath}</code>\n\nReady to chat!`,
+                { parse_mode: 'HTML' }
+            );
+        }
+    });
+
     // Handle incoming messages (Text and Photos)
     bot.on(['message:text', 'message:photo'], async (ctx) => {
-        const channelKey = getChannelKey(ctx);
+        const threadId = ctx.message.message_thread_id;
+        const isGeneral = !threadId || threadId === 1;
 
-        if (agyService.isBusy(channelKey)) {
-            await ctx.reply('⏳ Antigravity is busy running another task. Use /stop to cancel it.');
+        // RULE: No chatting directly in General chat
+        if (ctx.chat.type === 'supergroup' && isGeneral) {
+            const keyboard = new InlineKeyboard()
+                .text('📁 Browse Projects', 'cmd_projects')
+                .text('📜 Existing Chats', 'cmd_chats');
+
+            await ctx.reply(
+                '⚠️ <b>Chatting in General is disabled.</b>\n\n' +
+                'Every conversation must have its own topic:\n' +
+                '• <code>/new &lt;title&gt;</code> - Create a new topic & chat\n' +
+                '• <code>/projects</code> - Pick a project workspace\n' +
+                '• <code>/chats</code> - Assign an existing chat to a topic',
+                { parse_mode: 'HTML', reply_markup: keyboard }
+            );
             return;
         }
 
@@ -183,10 +433,18 @@ Send any text or screenshot to prompt Antigravity!
             return;
         }
 
+        const channelKey = getChannelKey(ctx);
+
+        if (agyService.isBusy(channelKey)) {
+            await ctx.reply('⏳ Antigravity is busy running another task in this conversation. Use /stop to cancel it.', {
+                message_thread_id: threadId,
+            });
+            return;
+        }
+
         const workspacePath = resolveWorkspace(channelKey);
         const session = db.getSession(channelKey);
 
-        const threadId = ctx.message.message_thread_id;
         const initialStatus = await ctx.reply('🧠 <i>Antigravity is thinking...</i>', {
             parse_mode: 'HTML',
             message_thread_id: threadId,
@@ -214,7 +472,6 @@ Send any text or screenshot to prompt Antigravity!
 
             try {
                 const formatted = formatForTelegram(displayText);
-                // Keep within 4000 chars for live edits
                 const truncated = formatted.length > 4000 ? formatted.slice(-4000) : formatted;
                 await ctx.api.editMessageText(
                     ctx.chat.id,
@@ -223,7 +480,6 @@ Send any text or screenshot to prompt Antigravity!
                     { parse_mode: 'HTML' }
                 );
             } catch (err: any) {
-                // Ignore harmless "message is not modified" errors from Telegram
                 if (!err.message?.includes('message is not modified')) {
                     logger.debug('[Bot] editMessageText error:', err.message);
                 }
@@ -289,6 +545,38 @@ Send any text or screenshot to prompt Antigravity!
                 { parse_mode: 'HTML' }
             );
         }
+    });
+
+    // General button callbacks
+    bot.callbackQuery('cmd_projects', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const workspaces = workspaceService.scanWorkspaces();
+        const keyboard = new InlineKeyboard();
+        for (let i = 0; i < workspaces.length; i++) {
+            const ws = workspaces[i];
+            keyboard.text(`📁 ${ws}`, `select_ws:${ws}`);
+            if (i % 2 === 1) keyboard.row();
+        }
+        await ctx.reply('<b>Select a workspace to start a topic:</b>', {
+            reply_markup: keyboard,
+            parse_mode: 'HTML',
+        });
+    });
+
+    bot.callbackQuery('cmd_chats', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const recents = convService.listRecent(6);
+        const keyboard = new InlineKeyboard();
+        for (const item of recents) {
+            convCache.set(item.conversationId, item);
+            const shortId = item.conversationId.slice(0, 8);
+            const label = item.title.length > 25 ? `${item.title.slice(0, 22)}...` : item.title;
+            keyboard.text(`💬 ${label}`, `assign_chat:${shortId}`).row();
+        }
+        await ctx.reply('<b>Select an existing conversation to assign to a topic:</b>', {
+            reply_markup: keyboard,
+            parse_mode: 'HTML',
+        });
     });
 
     return { bot, db };

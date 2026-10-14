@@ -1,40 +1,73 @@
 import { Api } from 'grammy';
 import { logger } from '../utils/logger';
 
-export interface EnsureTopicResult {
-    topicId: number;
-    created: boolean;
-}
-
 export class TelegramTopicManager {
     private readonly api: Api;
-    private readonly chatId: number | string;
-    private topicCache: Map<string, number> = new Map();
 
-    constructor(api: Api, chatId: number | string) {
+    constructor(api: Api) {
         this.api = api;
-        this.chatId = chatId;
     }
 
-    public async ensureTopic(workspaceName: string): Promise<EnsureTopicResult> {
-        const cached = this.topicCache.get(workspaceName);
-        if (cached) return { topicId: cached, created: false };
+    /**
+     * Sanitize topic title for Telegram (max 128 characters)
+     */
+    public sanitizeTitle(raw: string, defaultTitle: string = 'Conversation'): string {
+        const cleaned = raw.replace(/[\r\n]+/g, ' ').trim();
+        if (!cleaned) return defaultTitle;
+        return cleaned.length > 100 ? `${cleaned.slice(0, 97)}...` : cleaned;
+    }
 
+    /**
+     * Create a new forum topic for a conversation
+     */
+    public async createConversationTopic(chatId: number | string, title: string): Promise<number> {
+        const sanitized = this.sanitizeTitle(title);
+        const topicName = `💬 ${sanitized}`;
         try {
-            const topic = await this.api.createForumTopic(this.chatId, `📁 ${workspaceName}`);
-            this.topicCache.set(workspaceName, topic.message_thread_id);
-            return { topicId: topic.message_thread_id, created: true };
-        } catch (error: any) {
-            logger.error(`[TopicManager] Failed to create topic for "${workspaceName}":`, error?.message || error);
-            throw error;
+            logger.info(`[TopicManager] Creating topic "${topicName}" in chat ${chatId}`);
+            const topic = await this.api.createForumTopic(chatId, topicName);
+            return topic.message_thread_id;
+        } catch (err: any) {
+            logger.error(`[TopicManager] Failed to create conversation topic "${topicName}":`, err?.message || err);
+            throw err;
         }
     }
 
-    public registerTopic(workspaceName: string, topicId: number): void {
-        this.topicCache.set(workspaceName, topicId);
+    /**
+     * Create a forum topic for a project
+     */
+    public async createProjectTopic(chatId: number | string, projectName: string): Promise<number> {
+        const topicName = `📁 ${projectName}`;
+        try {
+            logger.info(`[TopicManager] Creating project topic "${topicName}" in chat ${chatId}`);
+            const topic = await this.api.createForumTopic(chatId, topicName);
+            return topic.message_thread_id;
+        } catch (err: any) {
+            logger.error(`[TopicManager] Failed to create project topic "${topicName}":`, err?.message || err);
+            throw err;
+        }
     }
 
-    public getTopicId(workspaceName: string): number | undefined {
-        return this.topicCache.get(workspaceName);
+    /**
+     * Rename a forum topic
+     */
+    public async renameTopic(chatId: number | string, topicId: number, newTitle: string): Promise<void> {
+        const sanitized = this.sanitizeTitle(newTitle);
+        try {
+            await this.api.editForumTopic(chatId, topicId, { name: sanitized });
+        } catch (err: any) {
+            logger.warn(`[TopicManager] Failed to rename topic ${topicId}:`, err?.message || err);
+        }
+    }
+
+    /**
+     * Close (archive) a forum topic
+     */
+    public async closeTopic(chatId: number | string, topicId: number): Promise<void> {
+        try {
+            await this.api.closeForumTopic(chatId, topicId);
+        } catch (err: any) {
+            logger.warn(`[TopicManager] Failed to close topic ${topicId}:`, err?.message || err);
+        }
     }
 }
