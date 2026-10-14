@@ -8,12 +8,20 @@ import { loadConfig, getConfigFilePath } from '../utils/config';
 import { createBot } from '../bot';
 import { logger } from '../utils/logger';
 
+const pkgPath = path.resolve(__dirname, '..', '..', 'package.json');
+let version = '1.0.0';
+try {
+    if (fs.existsSync(pkgPath)) {
+        version = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')).version || version;
+    }
+} catch {}
+
 const program = new Command();
 
 program
     .name('mobile-agy')
     .description('Mobile-friendly Telegram interface for Antigravity CLI')
-    .version('0.1.0');
+    .version(version);
 
 program
     .command('start')

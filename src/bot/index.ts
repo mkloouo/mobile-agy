@@ -947,18 +947,6 @@ export function createBot(config: AppConfig) {
             });
 
             const pid = child.pid;
-            const stopKeyboard = pid
-                ? new InlineKeyboard().text(`🛑 Stop (PID ${pid})`, `kill_proc:${pid}`)
-                : undefined;
-
-            const statusMsg = await ctx.reply(
-                `⚡ <code>$ ${escapeHtml(shellCmd)}</code>\n<i>Running${pid ? ` · PID ${pid}` : ''}...</i>`,
-                { parse_mode: 'HTML', reply_markup: stopKeyboard, message_thread_id: threadId }
-            );
-
-            if (pid) {
-                taskManager.registerProcess(pid, child, shellCmd, channelKey, workspacePath, ctx.chat!.id, statusMsg.message_id, threadId);
-            }
 
             const onData = (chunk: Buffer) => {
                 const str = chunk.toString('utf-8');
@@ -972,8 +960,6 @@ export function createBot(config: AppConfig) {
             child.stdout?.on('data', onData);
             child.stderr?.on('data', onData);
 
-            let runningTimer: NodeJS.Timeout | null = null;
-
             const formatShellMessage = (bodyText: string, statusTag: string): string => {
                 let clean = stripAnsi(bodyText).trim();
                 if (!clean) clean = '(no output)';
@@ -983,32 +969,59 @@ export function createBot(config: AppConfig) {
                 return `⚡ <b>$ ${escapeHtml(shellCmd)}</b>${statusTag}\n<pre><code>${escapeHtml(clean)}</code></pre>`;
             };
 
-            // Periodically refresh running output if still active after 2.5s
-            runningTimer = setInterval(async () => {
-                if (hasExited || !pid) return;
+            const stopKeyboard = pid
+                ? new InlineKeyboard().text(`🛑 Stop (PID ${pid})`, `kill_proc:${pid}`)
+                : undefined;
 
-                const statusTag = ` [Running · PID ${pid}]`;
-                const msgText = formatShellMessage(outputBuffer || '(process running in background...)', statusTag);
-                const chunks = splitTelegramHtml(msgText);
+            let runningTimer: NodeJS.Timeout | null = null;
 
-                try {
-                    await ctx.api.editMessageText(
-                        ctx.chat!.id,
-                        statusMsg.message_id,
-                        chunks[0],
-                        { parse_mode: 'HTML', reply_markup: stopKeyboard }
-                    );
-                } catch (err: any) {
-                    logger.debug('[Shell] Failed to edit background status:', err.message);
+            // Send initial status message asynchronously
+            const statusMsgPromise = ctx.reply(
+                `⚡ <code>$ ${escapeHtml(shellCmd)}</code>\n<i>Running${pid ? ` · PID ${pid}` : ''}...</i>`,
+                { parse_mode: 'HTML', reply_markup: stopKeyboard, message_thread_id: threadId }
+            ).then((msg) => {
+                if (pid && !hasExited) {
+                    taskManager.registerProcess(pid, child, shellCmd, channelKey, workspacePath, ctx.chat!.id, msg.message_id, threadId);
+
+                    // Periodically refresh running output if still active after 2.5s
+                    runningTimer = setInterval(async () => {
+                        if (hasExited || !pid) {
+                            if (runningTimer) clearInterval(runningTimer);
+                            return;
+                        }
+
+                        const statusTag = ` [Running · PID ${pid}]`;
+                        const msgText = formatShellMessage(outputBuffer || '(process running in background...)', statusTag);
+                        const chunks = splitTelegramHtml(msgText);
+
+                        try {
+                            await ctx.api.editMessageText(
+                                ctx.chat!.id,
+                                msg.message_id,
+                                chunks[0],
+                                { parse_mode: 'HTML', reply_markup: stopKeyboard }
+                            );
+                        } catch (err: any) {
+                            logger.debug('[Shell] Failed to edit background status:', err.message);
+                        }
+                    }, 3000);
                 }
-            }, 3000);
+                return msg;
+            }).catch((err) => {
+                logger.error('[Bot] Failed to send initial shell status message:', err);
+                return null;
+            });
 
-            child.on('close', async (code, signal) => {
+            const finalizeOutput = async (code: number | null, signal: string | null) => {
+                if (hasExited) return;
                 hasExited = true;
                 exitCode = code;
                 exitSignal = signal;
                 if (runningTimer) clearInterval(runningTimer);
                 if (pid) taskManager.unregisterProcess(pid);
+
+                const statusMsg = await statusMsgPromise;
+                if (!statusMsg) return;
 
                 const statusTag = exitCode === 0
                     ? ''
@@ -1034,12 +1047,20 @@ export function createBot(config: AppConfig) {
                 } catch (editErr: any) {
                     logger.error('[Bot] Failed to finalize shell output:', editErr);
                 }
+            };
+
+            child.on('close', (code, signal) => {
+                finalizeOutput(code, signal);
             });
 
             child.on('error', async (err) => {
+                if (hasExited) return;
                 hasExited = true;
-                if (runningTimer) clearTimeout(runningTimer);
+                if (runningTimer) clearInterval(runningTimer);
                 if (pid) taskManager.unregisterProcess(pid);
+
+                const statusMsg = await statusMsgPromise;
+                if (!statusMsg) return;
 
                 try {
                     await ctx.api.editMessageText(
