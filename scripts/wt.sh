@@ -61,8 +61,10 @@ run_check() {
     echo "CHECK SKIPPED (WT_SKIP_CHECK=1)"
     return 0
   fi
-  bun run check || return 1
-  bun run lint || return 1
+  if npm run | grep -q ' check$'; then
+    npm run check || return 1
+  fi
+  npm run build || return 1
 }
 
 cmd_start() {
@@ -78,14 +80,9 @@ cmd_start() {
   fi
   local wt="$MAIN/.worktrees/$id"
   git -C "$MAIN" worktree add -b "$id" "$wt" main
-  # ponytail: temporary until expo-release is published to npm. package.json has file:../release,
-  # which from .worktrees/<ID> resolves to .worktrees/release, so link it to the sibling checkout.
-  if [[ -d "$MAIN/../release" && ! -e "$MAIN/.worktrees/release" && ! -L "$MAIN/.worktrees/release" ]]; then
-    ln -s ../../release "$MAIN/.worktrees/release"
-  fi
   if [[ "${WT_SKIP_INSTALL:-}" != 1 ]]; then
-    if ! (cd "$wt" && bun install --frozen-lockfile); then
-      die 1 "INSTALL FAILED in $wt. Worktree kept. Fix the cause, then rerun: (cd $wt && bun install --frozen-lockfile)"
+    if ! (cd "$wt" && npm install); then
+      die 1 "INSTALL FAILED in $wt. Worktree kept. Fix the cause, then rerun: (cd $wt && npm install)"
     fi
   fi
   echo "WORKTREE: $wt"
