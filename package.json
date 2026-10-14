@@ -3,9 +3,13 @@
   "version": "0.1.0",
   "description": "Mobile-friendly Telegram interface for Google Antigravity CLI via native stream-json",
   "main": "dist/index.js",
+  "bin": {
+    "mobile-agy": "./dist/bin/cli.js",
+    "agy-telegram": "./dist/bin/cli.js"
+  },
   "scripts": {
-    "build": "tsc",
-    "start": "ts-node src/bin/cli.ts start",
+    "build": "tsc && chmod +x dist/bin/cli.js",
+    "start": "node dist/bin/cli.js start",
     "dev": "ts-node-dev --respawn src/bin/cli.ts start"
   },
   "dependencies": {

@@ -3,7 +3,7 @@ import { AppConfig } from '../utils/config';
 import { DatabaseManager } from '../database/db';
 import { WorkspaceService } from '../services/workspaceService';
 import { TelegramTopicManager } from '../services/telegramTopicManager';
-import { ConversationService, ConversationSummary } from '../services/conversationService';
+import { ConversationService, ConversationSummary, SearchResult } from '../services/conversationService';
 import { AgyStreamService } from '../services/agyStreamService';
 import { escapeHtml, formatForTelegram, splitTelegramHtml } from '../utils/telegramFormatter';
 import { downloadTelegramPhoto } from '../utils/imageHandler';
@@ -15,13 +15,18 @@ export function createBot(config: AppConfig) {
     const workspaceService = new WorkspaceService(config.workspaceBaseDir);
     const topicManager = new TelegramTopicManager(bot.api);
     const convService = new ConversationService();
-    const agyService = new AgyStreamService();
+    const agyService = new AgyStreamService(config.idleTimeoutSeconds);
 
     // In-memory cache for recent conversations to support callback buttons
     const convCache = new Map<string, ConversationSummary>();
 
     // Whitelist Authorization Middleware
     bot.use(async (ctx, next) => {
+        // Ignore messages from bots (including self) to prevent loops
+        if (ctx.from?.is_bot) {
+            return;
+        }
+
         if (config.allowedUserIds.length > 0) {
             const userId = ctx.from?.id;
             if (!userId || !config.allowedUserIds.includes(userId)) {
@@ -70,6 +75,57 @@ export function createBot(config: AppConfig) {
         }
     }
 
+    /**
+     * Helper to render /chats keyboard with pagination
+     */
+    function buildChatsUI(result: SearchResult, query: string): { text: string; keyboard: InlineKeyboard } {
+        const keyboard = new InlineKeyboard();
+
+        if (result.items.length === 0) {
+            return {
+                text: query
+                    ? `No conversations found matching "<b>${escapeHtml(query)}</b>".`
+                    : 'No conversations found in history.',
+                keyboard,
+            };
+        }
+
+        for (const item of result.items) {
+            convCache.set(item.conversationId, item);
+            const shortId = item.conversationId.slice(0, 8);
+            const label = item.title.length > 28 ? `${item.title.slice(0, 25)}...` : item.title;
+            keyboard.text(`💬 ${label}`, `assign_chat:${shortId}`).row();
+        }
+
+        // Pagination buttons if more than one page
+        if (result.totalPages > 1) {
+            const prevPage = Math.max(0, result.page - 1);
+            const nextPage = Math.min(result.totalPages - 1, result.page + 1);
+            const encQuery = encodeURIComponent(query);
+
+            if (result.page > 0) {
+                keyboard.text('◀ Prev', `chats_p:${prevPage}:${encQuery}`);
+            } else {
+                keyboard.text('·', 'noop');
+            }
+
+            keyboard.text(`${result.page + 1} / ${result.totalPages}`, 'noop');
+
+            if (result.page < result.totalPages - 1) {
+                keyboard.text('Next ▶', `chats_p:${nextPage}:${encQuery}`);
+            } else {
+                keyboard.text('·', 'noop');
+            }
+            keyboard.row();
+        }
+
+        const titleHeader = query
+            ? `<b>Conversations matching "${escapeHtml(query)}" (${result.totalCount}):</b>`
+            : `<b>Select an existing conversation to assign to a topic (${result.totalCount} total):</b>`;
+
+        return { text: titleHeader, keyboard };
+    }
+
     // Command: /start or /help
     bot.command(['start', 'help'], async (ctx) => {
         const channelKey = getChannelKey(ctx);
@@ -84,7 +140,7 @@ export function createBot(config: AppConfig) {
 
 <b>Commands:</b>
 • <code>/new &lt;title&gt;</code> - Create a new topic & conversation
-• <code>/chats</code> - Browse and assign an existing chat to a topic
+• <code>/chats [query]</code> - Browse past Antigravity chats with pagination/search
 • <code>/projects</code> - View and select project workspace (creates a topic)
 • <code>/resume &lt;id&gt;</code> - Attach a specific conversation ID to this topic
 • <code>/bind &lt;workspace&gt;</code> - Bind this topic to a workspace folder
@@ -92,7 +148,7 @@ export function createBot(config: AppConfig) {
 • <code>/stop</code> - Stop current running task
 • <code>/status</code> - Show execution and session info
 
-<i>Note: Chatting directly in the General chat is disabled. All chats must have a topic.</i>
+<i>Note: Chatting in General is disabled. Every conversation must be in its own topic.</i>
         `.trim();
 
         await ctx.reply(helpText, { parse_mode: 'HTML' });
@@ -160,8 +216,8 @@ export function createBot(config: AppConfig) {
         }
     });
 
-    // Command: /projects
-    bot.command('projects', async (ctx) => {
+    // Command: /projects or /project
+    bot.command(['projects', 'project'], async (ctx) => {
         const workspaces = workspaceService.scanWorkspaces();
         if (workspaces.length === 0) {
             return ctx.reply(`No subdirectories found in <code>${workspaceService.getBaseDir()}</code>`, {
@@ -182,22 +238,27 @@ export function createBot(config: AppConfig) {
         });
     });
 
-    // Command: /chats - List recent Antigravity conversations to assign to a topic
+    // Command: /chats [query] - List recent Antigravity conversations with pagination
     bot.command('chats', async (ctx) => {
-        const recents = convService.listRecent(6);
-        if (recents.length === 0) {
-            return ctx.reply('No existing Antigravity conversations found in history.');
-        }
+        const query = ctx.match?.trim() || '';
+        const searchResult = convService.search(query, 0, 5);
+        const { text, keyboard } = buildChatsUI(searchResult, query);
 
-        const keyboard = new InlineKeyboard();
-        for (const item of recents) {
-            convCache.set(item.conversationId, item);
-            const shortId = item.conversationId.slice(0, 8);
-            const label = item.title.length > 25 ? `${item.title.slice(0, 22)}...` : item.title;
-            keyboard.text(`💬 ${label}`, `assign_chat:${shortId}`).row();
-        }
+        await ctx.reply(text, {
+            reply_markup: keyboard,
+            parse_mode: 'HTML',
+        });
+    });
 
-        await ctx.reply('<b>Select an existing conversation to assign to a topic:</b>', {
+    // Handle pagination callback for /chats
+    bot.callbackQuery(/^chats_p:(\d+):(.*)$/, async (ctx) => {
+        const page = parseInt(ctx.match[1], 10) || 0;
+        const query = decodeURIComponent(ctx.match[2] || '');
+        const searchResult = convService.search(query, page, 5);
+        const { text, keyboard } = buildChatsUI(searchResult, query);
+
+        await ctx.answerCallbackQuery();
+        await ctx.editMessageText(text, {
             reply_markup: keyboard,
             parse_mode: 'HTML',
         });
@@ -214,7 +275,6 @@ export function createBot(config: AppConfig) {
         const isGeneral = !threadId || threadId === 1;
 
         if (ctx.chat?.type === 'supergroup' && isGeneral) {
-            // If in General, create a topic for it!
             const summary = convService.getSummary(convId);
             const title = summary?.title || `Resume ${convId.slice(0, 8)}`;
             const wsPath = summary?.workspacePath || workspaceService.getBaseDir();
@@ -234,7 +294,6 @@ export function createBot(config: AppConfig) {
             }
         }
 
-        // Inside a topic or DM
         const channelKey = getChannelKey(ctx);
         const ws = resolveWorkspace(channelKey);
         db.saveSession(channelKey, ws, convId, threadId);
@@ -332,7 +391,6 @@ export function createBot(config: AppConfig) {
         const chatId = ctx.chat?.id;
         if (!chatId) return;
 
-        // Find from cache or service
         let match: ConversationSummary | undefined;
         for (const [id, summary] of convCache.entries()) {
             if (id.startsWith(shortId)) {
@@ -342,8 +400,8 @@ export function createBot(config: AppConfig) {
         }
 
         if (!match) {
-            const recents = convService.listRecent(10);
-            match = recents.find((r) => r.conversationId.startsWith(shortId));
+            const searchRes = convService.search('', 0, 20);
+            match = searchRes.items.find((r) => r.conversationId.startsWith(shortId));
         }
 
         if (!match) {
@@ -355,7 +413,6 @@ export function createBot(config: AppConfig) {
         const isGeneral = !threadId || threadId === 1;
 
         if (config.useTopics && ctx.chat?.type === 'supergroup' && isGeneral) {
-            // Create a dedicated topic for this existing conversation
             try {
                 const topicTitle = match.title || `Chat ${shortId}`;
                 const newTopicId = await topicManager.createConversationTopic(chatId, topicTitle);
@@ -380,7 +437,6 @@ export function createBot(config: AppConfig) {
                 await ctx.reply(`Failed to create topic: ${err.message}`);
             }
         } else {
-            // Already inside a topic (or DM): attach to current topic
             const channelKey = getChannelKey(ctx);
             const wsPath = match.workspacePath || resolveWorkspace(channelKey);
             db.saveSession(channelKey, wsPath, match.conversationId, threadId);
@@ -393,12 +449,43 @@ export function createBot(config: AppConfig) {
         }
     });
 
+    // Handle noop callbacks
+    bot.callbackQuery('noop', async (ctx) => {
+        await ctx.answerCallbackQuery();
+    });
+
+    // General button callbacks
+    bot.callbackQuery('cmd_projects', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const workspaces = workspaceService.scanWorkspaces();
+        const keyboard = new InlineKeyboard();
+        for (let i = 0; i < workspaces.length; i++) {
+            const ws = workspaces[i];
+            keyboard.text(`📁 ${ws}`, `select_ws:${ws}`);
+            if (i % 2 === 1) keyboard.row();
+        }
+        await ctx.reply('<b>Select a workspace to start a topic:</b>', {
+            reply_markup: keyboard,
+            parse_mode: 'HTML',
+        });
+    });
+
+    bot.callbackQuery('cmd_chats', async (ctx) => {
+        await ctx.answerCallbackQuery();
+        const searchResult = convService.search('', 0, 5);
+        const { text, keyboard } = buildChatsUI(searchResult, '');
+        await ctx.reply(text, {
+            reply_markup: keyboard,
+            parse_mode: 'HTML',
+        });
+    });
+
     // Handle incoming messages (Text and Photos)
     bot.on(['message:text', 'message:photo'], async (ctx) => {
         const threadId = ctx.message.message_thread_id;
         const isGeneral = !threadId || threadId === 1;
 
-        // RULE: No chatting directly in General chat
+        // RULE 1: No chatting directly in General chat
         if (ctx.chat.type === 'supergroup' && isGeneral) {
             const keyboard = new InlineKeyboard()
                 .text('📁 Browse Projects', 'cmd_projects')
@@ -433,6 +520,16 @@ export function createBot(config: AppConfig) {
             return;
         }
 
+        // RULE 2: Catch unrecognized slash commands so they don't get sent to Antigravity CLI as heavy prompts!
+        if (userPrompt.startsWith('/')) {
+            const cmd = userPrompt.split(/[\s@]/)[0];
+            await ctx.reply(
+                `❓ Unknown command: <code>${escapeHtml(cmd)}</code>\n\nUse /help to see all available commands.`,
+                { parse_mode: 'HTML', message_thread_id: threadId }
+            );
+            return;
+        }
+
         const channelKey = getChannelKey(ctx);
 
         if (agyService.isBusy(channelKey)) {
@@ -457,7 +554,7 @@ export function createBot(config: AppConfig) {
         const updateTelegramStatus = async (force: boolean = false) => {
             const now = Date.now();
             if (!force && now - lastEditTime < 1500) {
-                return; // Throttle to avoid Telegram rate limits
+                return;
             }
             lastEditTime = now;
 
@@ -545,38 +642,6 @@ export function createBot(config: AppConfig) {
                 { parse_mode: 'HTML' }
             );
         }
-    });
-
-    // General button callbacks
-    bot.callbackQuery('cmd_projects', async (ctx) => {
-        await ctx.answerCallbackQuery();
-        const workspaces = workspaceService.scanWorkspaces();
-        const keyboard = new InlineKeyboard();
-        for (let i = 0; i < workspaces.length; i++) {
-            const ws = workspaces[i];
-            keyboard.text(`📁 ${ws}`, `select_ws:${ws}`);
-            if (i % 2 === 1) keyboard.row();
-        }
-        await ctx.reply('<b>Select a workspace to start a topic:</b>', {
-            reply_markup: keyboard,
-            parse_mode: 'HTML',
-        });
-    });
-
-    bot.callbackQuery('cmd_chats', async (ctx) => {
-        await ctx.answerCallbackQuery();
-        const recents = convService.listRecent(6);
-        const keyboard = new InlineKeyboard();
-        for (const item of recents) {
-            convCache.set(item.conversationId, item);
-            const shortId = item.conversationId.slice(0, 8);
-            const label = item.title.length > 25 ? `${item.title.slice(0, 22)}...` : item.title;
-            keyboard.text(`💬 ${label}`, `assign_chat:${shortId}`).row();
-        }
-        await ctx.reply('<b>Select an existing conversation to assign to a topic:</b>', {
-            reply_markup: keyboard,
-            parse_mode: 'HTML',
-        });
     });
 
     return { bot, db };

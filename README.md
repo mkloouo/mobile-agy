@@ -28,12 +28,19 @@ Unlike desktop CDP-based remotes, `mobile-friendly-agy` connects directly to the
 - Node.js >= 18.
 - A Telegram Bot Token from [@BotFather](https://t.me/BotFather).
 
-### 2. Quick Setup
+### 2. Build & Link Global Binary
+
+```bash
+npm run build
+npm link
+```
+
+### 3. Quick Setup
 
 Run the interactive setup wizard:
 
 ```bash
-npm start -- setup
+mobile-agy setup
 ```
 
 Or copy `.env.example` to `.env` and fill in your values:
@@ -44,20 +51,24 @@ ALLOWED_USER_IDS=12345678
 WORKSPACE_BASE_DIR=/Users/mkloouo/Projects
 USE_TOPICS=true
 AUTO_APPROVE=true
+# Keep warm agy processes alive for fast follow-up replies (default 300 seconds = 5m)
+IDLE_TIMEOUT_SECONDS=300
 ```
 
 > **Tip:** You can get your numeric Telegram user ID by messaging [@userinfobot](https://t.me/userinfobot).
 
-### 3. Run the Bot
+### 4. Run the Bot
 
-**Development mode (auto-reload on edit):**
+From anywhere in your terminal:
+
+```bash
+mobile-agy
+```
+*(Alias: `agy-telegram`)*
+
+Or in development mode with auto-reload:
 ```bash
 npm run dev
-```
-
-**Production mode:**
-```bash
-npm run build && npm start
 ```
 
 ---

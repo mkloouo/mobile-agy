@@ -1,15 +1,17 @@
+#!/usr/bin/env node
 import { Command } from 'commander';
 import readline from 'readline';
 import fs from 'fs';
 import path from 'path';
-import { loadConfig } from '../utils/config';
+import os from 'os';
+import { loadConfig, getConfigFilePath } from '../utils/config';
 import { createBot } from '../bot';
 import { logger } from '../utils/logger';
 
 const program = new Command();
 
 program
-    .name('mobile-friendly-agy')
+    .name('mobile-agy')
     .description('Mobile-friendly Telegram interface for Antigravity CLI')
     .version('0.1.0');
 
@@ -20,7 +22,7 @@ program
         const config = loadConfig();
         if (!config.telegramBotToken) {
             console.error('\n❌ Error: TELEGRAM_BOT_TOKEN is missing!');
-            console.log('Run `npm run start -- setup` or create a `.env` file with your token.\n');
+            console.log('Run `mobile-agy setup` or create a `.env` file with your token.\n');
             process.exit(1);
         }
 
@@ -66,7 +68,7 @@ program
 
         const token = await question('1. Enter your Telegram Bot Token (from @BotFather): ');
         const userIds = await question('2. Enter allowed Telegram user IDs (comma-separated, leave blank for all): ');
-        const defaultBase = path.resolve(process.cwd(), '..');
+        const defaultBase = path.join(os.homedir(), 'Projects');
         const baseDir = await question(`3. Workspace projects directory (default: ${defaultBase}): `);
 
         rl.close();
@@ -79,11 +81,20 @@ program
             `AUTO_APPROVE=true`,
         ].join('\n') + '\n';
 
-        const envPath = path.resolve(process.cwd(), '.env');
+        const envPath = getConfigFilePath();
+        const dir = path.dirname(envPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
         fs.writeFileSync(envPath, envContent, 'utf-8');
 
         console.log(`\n✅ Saved configuration to ${envPath}`);
-        console.log('Run `npm start` or `npm run dev` to launch the bot!\n');
+        console.log('Run `mobile-agy` to launch the bot!\n');
     });
+
+// Default to 'start' if no subcommand provided
+if (process.argv.length <= 2) {
+    process.argv.push('start');
+}
 
 program.parse(process.argv);
