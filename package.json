@@ -1,0 +1,24 @@
+{
+  "name": "mobile-friendly-agy",
+  "version": "0.1.0",
+  "description": "Mobile-friendly Telegram interface for Google Antigravity CLI via native stream-json",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/bin/cli.ts start",
+    "dev": "ts-node-dev --respawn src/bin/cli.ts start"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2",
+    "commander": "^14.0.3",
+    "dotenv": "^17.3.1",
+    "grammy": "^1.40.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.13.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.7.3"
+  }
+}
