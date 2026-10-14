@@ -1,101 +1,125 @@
-# mobile-friendly-agy
+<div align="center">
 
-A lightweight, mobile-friendly Telegram bot interface for **Google Antigravity CLI (`agy`)**.
+```
+           / _ \
+         \_\(_)/_/
+          _// \\_
+           /   \
+  __  __  ___  ___ ___ _    ___     _   _____   __
+ |  \/  |/ _ \| _ )_ _| |  | __|   /_\ / __\ \ / /
+ | |\/| | (_) | _ \| || |__| _|   / _ \ (_ |\ V / 
+ |_|  |_|\___/|___/___|____|___|_/_/ \_\___| |_|  
+```
 
-Unlike desktop CDP-based remotes, `mobile-friendly-agy` connects directly to the Antigravity CLI using its native, warm **`stream-json`** protocol. No Electron desktop app, no Chrome DevTools Protocol, and no brittle DOM scraping.
+# mobile-agy
+
+### Control Google Antigravity CLI from anywhere — straight from Telegram.
+
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen?style=flat-square&logo=node.js)](https://nodejs.org/)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey?style=flat-square)](https://github.com/mkloouo/mobile-agy)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
+
+*Direct inspiration: [Remoat](https://github.com/optimistengineer/remoat) and the futile efforts of wrestling with CDP/DOM scraping that brought this native headless architecture to life.*
+
+</div>
 
 ---
 
-## Features
+**mobile-agy** connects Telegram directly to Google Antigravity CLI (`agy`) using its native, warm **`stream-json`** protocol. No Electron GUI, no Chrome DevTools Protocol, and no brittle DOM scraping.
 
-- **Automatic Topic Per Conversation**: In forum-enabled supergroups, every new prompt outside a topic, every `/new [title]`, and every `/projects` selection automatically creates a dedicated Telegram Forum Topic.
-- **Native Headless Streaming**: Uses `agy --input-format stream-json --output-format stream-json` directly on your Mac.
-- **Zero API Key Hassle**: Uses your existing logged-in Antigravity account, plugins, MCP servers, and custom skills automatically.
-- **Live Output Streaming**: Throttled live text editing in Telegram with emoji status indicators for tool executions (e.g. `⚙️ Executing: run_command`).
-- **Project Switching**: Switch between projects in your workspace with `/projects` via interactive inline buttons (auto-creates a project topic).
-- **Multi-turn Sessions**: Retains conversation history across turns within each topic and recovers seamlessly across restarts.
-- **Media Support**: Send screenshots and photos from your mobile phone—the bot downloads them to a local temporary path and attaches them to the prompt.
-- **Task Control**: Abort running tasks on the fly with `/stop`.
-- **Security**: Whitelist protection via `ALLOWED_USER_IDS`.
+## Highlights
+
+- 🕷️ **Zero Friction**: Native headless streaming (`agy --input-format stream-json --output-format stream-json`) directly on your machine.
+- 💬 **Topic-Per-Conversation**: Automatic forum topic creation for every session and project.
+- ⚡ **Direct Shell & Kill Switch**: Execute commands with `! <cmd>` and kill running tasks instantly via inline buttons or `/kill`.
+- ⚙️ **Background Server Awareness**: Live tracking and stop buttons for active dev servers (Metro bundler, Expo, Next.js).
+- 🤖 **Model Switching**: Change reasoning models on the fly with `/model` (`gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`).
+- 🗜️ **Context Management**: Fast transcript compaction with `/compact` and quota monitoring with `/quota`.
+- 📸 **Mobile Media**: Send screenshots or photos straight from your phone.
+- 🔒 **Private & Secure**: User whitelist restriction (`ALLOWED_USER_IDS`).
 
 ---
 
-## Getting Started
+## Quick Start
 
 ### 1. Requirements
 
-- macOS or Linux with `agy` (Antigravity CLI) installed and logged in.
+- macOS or Linux with [`agy`](https://antigravity.dev) logged in.
 - Node.js >= 18.
-- A Telegram Bot Token from [@BotFather](https://t.me/BotFather).
+- Telegram Bot Token from [@BotFather](https://t.me/BotFather).
 
-### 2. Build & Link Global Binary
+### 2. Install & Link
 
 ```bash
+npm install
 npm run build
 npm link
 ```
 
-### 3. Quick Setup
+### 3. Setup & Configure
 
 Run the interactive setup wizard:
-
 ```bash
 mobile-agy setup
 ```
 
-Or copy `.env.example` to `.env` and fill in your values:
-
+Or configure `.env`:
 ```env
 TELEGRAM_BOT_TOKEN=123456789:ABCDefGhIJKlmNoPQRsTUVwxyZ
-ALLOWED_USER_IDS=12345678
+ALLOWED_USER_IDS=826906943
 WORKSPACE_BASE_DIR=/Users/mkloouo/Projects
+DEFAULT_MODEL=gemini-3.8-flash-medium
 USE_TOPICS=true
 AUTO_APPROVE=true
-# Keep warm agy processes alive for fast follow-up replies (default 300 seconds = 5m)
 IDLE_TIMEOUT_SECONDS=300
 ```
 
-> **Tip:** You can get your numeric Telegram user ID by messaging [@userinfobot](https://t.me/userinfobot).
-
-### 4. Run the Bot
-
-From anywhere in your terminal:
+### 4. Run
 
 ```bash
 mobile-agy
 ```
-*(Alias: `agy-telegram`)*
 
-Or in development mode with auto-reload:
+Or as a persistent background daemon with **PM2**:
 ```bash
-npm run dev
-```
-
----
-
-## Bot Commands
-
-| Command | Description |
-| :--- | :--- |
-| `/agy_new [title]` | Create a new topic and start a fresh conversation |
-| `/agy_chats [query]` | Browse recent Antigravity conversations with pagination/search and assign to a topic |
-| `/agy_projects` | List available workspace directories with inline selection buttons |
-| `/agy_resume <id>` | Attach an existing Antigravity conversation ID to the current topic |
-| `/agy_bind <workspace>` | Bind current topic to a specific workspace directory |
-| `/agy_topic <name>` | Rename the current Telegram forum topic |
-| `/agy_stop` | Immediately interrupt and terminate the running agent turn or warm process |
-| `/agy_status` | View current workspace directory, active conversation UUID, and task state |
-| `/agy_help` | Display quickstart guide and available commands |
-
----
-
-## Optional: Run 24/7 in Background on macOS
-
-You can run this as a persistent background daemon using `pm2`:
-
-```bash
-npm install -g pm2
 pm2 start dist/bin/cli.js --name "mobile-agy" -- start
 pm2 save
-pm2 startup
 ```
+
+---
+
+## Commands
+
+| Command | Action |
+| :--- | :--- |
+| `! <cmd>` | Execute shell command directly with live output and instant Stop button |
+| `/model [name]` | Switch AI model for topic (`gemini-3.8-flash-medium`, `claude-sonnet-4-6`, etc.) |
+| `/compact [focus]` | Compact conversation context to stay under token limits |
+| `/kill [pid]` / `/stop` | Cancel active Antigravity turn or kill background servers |
+| `/quota` | View remaining 5-hour and weekly quota across all models |
+| `/agy_new [title]` | Create a new topic and start a fresh session |
+| `/agy_projects` | Browse and bind workspace projects with inline buttons |
+| `/agy_chats [query]` | Search and attach previous conversations |
+| `/agy_status` | View workspace, conversation ID, model, and active background servers |
+| `/agy_help` | View help and available slash commands |
+
+---
+
+## Architecture
+
+Unlike desktop CDP remotes, `mobile-agy` spawns an isolated Unix socket daemon for each topic running `agy` in native `stream-json` mode:
+
+```
+Telegram ──> Grammy Bot ──> Unix Domain Socket ──> sessionDaemon ──> agy (stream-json)
+                                                         │
+                                               Live Task Tracker (PID/Port)
+```
+
+- **Warm Process Pooling**: Fast follow-ups without re-initializing tools.
+- **Fail-Safe Detached Daemon**: Sessions survive bot restarts and reconnect automatically.
+
+---
+
+## License
+
+MIT

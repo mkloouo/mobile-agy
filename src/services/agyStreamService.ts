@@ -1,5 +1,9 @@
-import { spawn, ChildProcess } from 'child_process';
+import net from 'net';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 import readline from 'readline';
+import { spawn } from 'child_process';
 import { logger } from '../utils/logger';
 
 export interface TurnOptions {
@@ -22,268 +26,369 @@ export interface TurnResult {
     conversationId: string;
 }
 
-interface WarmSession {
-    proc: ChildProcess;
+export interface SessionPaths {
+    socketPath: string;
+    statePath: string;
+    hash: string;
+}
+
+export function getSessionPaths(sessionId: string): SessionPaths {
+    const hash = crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
+    return {
+        socketPath: `/tmp/magy_${hash}.sock`,
+        statePath: `/tmp/magy_${hash}.json`,
+        hash,
+    };
+}
+
+interface ActiveSocketSession {
+    socket: net.Socket;
+    socketPath: string;
+    statePath: string;
+    sessionId: string;
     workspacePath: string;
     currentConvId: string;
+    model?: string;
     isBusy: boolean;
-    idleTimer: NodeJS.Timeout | null;
-    safetyTimer: NodeJS.Timeout | null;
     accumulatedText: string;
     activeOptions?: TurnOptions;
     currentResolve?: (res: TurnResult) => void;
     currentReject?: (err: any) => void;
+    safetyTimer?: NodeJS.Timeout | null;
 }
 
 export class AgyStreamService {
-    private sessions: Map<string, WarmSession> = new Map();
-    private readonly idleTimeoutMs: number;
+    private sessions: Map<string, ActiveSocketSession> = new Map();
+    private readonly idleTimeoutSeconds: number;
 
     constructor(idleTimeoutSeconds: number = 300) {
-        this.idleTimeoutMs = idleTimeoutSeconds * 1000;
-        logger.info(`[AgyStream] Warm process idle timeout set to ${idleTimeoutSeconds}s`);
-    }
-
-    /**
-     * Stop active execution or warm process for a session
-     */
-    public stopSession(sessionId: string): boolean {
-        const session = this.sessions.get(sessionId);
-        if (!session) return false;
-
-        logger.info(`[AgyStream] Stopping session ${sessionId}`);
-
-        if (session.idleTimer) clearTimeout(session.idleTimer);
-        if (session.safetyTimer) clearTimeout(session.safetyTimer);
-
-        if (!session.proc.killed) {
-            session.proc.kill('SIGINT');
-            setTimeout(() => {
-                if (!session.proc.killed) session.proc.kill('SIGKILL');
-            }, 1500);
-        }
-
-        if (session.currentResolve) {
-            session.currentResolve({
-                status: 'STOPPED',
-                response: session.accumulatedText || '<i>Task was stopped.</i>',
-                durationSeconds: 0,
-                conversationId: session.currentConvId,
-            });
-        }
-
-        this.sessions.delete(sessionId);
-        return true;
+        this.idleTimeoutSeconds = idleTimeoutSeconds;
+        logger.info(`[AgyStream] Unix Domain Socket runner initialized (idle timeout: ${idleTimeoutSeconds}s)`);
     }
 
     /**
      * Check if a session is currently executing a turn
      */
     public isBusy(sessionId: string): boolean {
-        return this.sessions.get(sessionId)?.isBusy ?? false;
+        const inMem = this.sessions.get(sessionId);
+        if (inMem) return inMem.isBusy;
+
+        const paths = getSessionPaths(sessionId);
+        try {
+            if (fs.existsSync(paths.statePath)) {
+                const state = JSON.parse(fs.readFileSync(paths.statePath, 'utf-8'));
+                return !!state.isBusy;
+            }
+        } catch {}
+
+        return false;
     }
 
     /**
-     * Execute a prompt turn, reusing an existing warm process if available
+     * Stop active execution or warm process for a session
      */
-    public executeTurn(sessionId: string, options: TurnOptions): Promise<TurnResult> {
-        return new Promise((resolve, reject) => {
-            const existing = this.sessions.get(sessionId);
+    public stopSession(sessionId: string): boolean {
+        const paths = getSessionPaths(sessionId);
+        const inMem = this.sessions.get(sessionId);
 
-            // 1. If currently running a turn, reject
-            if (existing && existing.isBusy) {
-                return reject(new Error('A task is already running in this session. Send /stop to interrupt it first.'));
-            }
+        logger.info(`[AgyStream] Stopping session ${sessionId}`);
 
-            // 2. Check if we can reuse the warm session
-            if (
-                existing &&
-                !existing.proc.killed &&
-                existing.workspacePath === options.workspacePath &&
-                (!options.conversationId || existing.currentConvId === options.conversationId)
-            ) {
-                logger.info(`[AgyStream] Reusing warm process for session ${sessionId} (Conv: ${existing.currentConvId})`);
+        if (inMem) {
+            if (inMem.safetyTimer) clearTimeout(inMem.safetyTimer);
+            try {
+                inMem.socket.write(JSON.stringify({ action: 'stop' }) + '\n');
+            } catch {}
+            inMem.socket.destroy();
+            this.sessions.delete(sessionId);
+        }
 
-                // Cancel idle timeout
-                if (existing.idleTimer) {
-                    clearTimeout(existing.idleTimer);
-                    existing.idleTimer = null;
+        // Clean up socket and state files
+        try {
+            if (fs.existsSync(paths.socketPath)) fs.unlinkSync(paths.socketPath);
+        } catch {}
+        try {
+            if (fs.existsSync(paths.statePath)) fs.unlinkSync(paths.statePath);
+        } catch {}
+
+        return true;
+    }
+
+    /**
+     * Associate Telegram message ID with this session in state file (for reconnect recovery)
+     */
+    public setTelegramStatus(sessionId: string, statusMessageId: number, chatId: number, threadId?: number): void {
+        const inMem = this.sessions.get(sessionId);
+        if (inMem && !inMem.socket.destroyed) {
+            try {
+                inMem.socket.write(JSON.stringify({
+                    action: 'set_telegram_status',
+                    statusMessageId,
+                    chatId,
+                    threadId,
+                }) + '\n');
+            } catch {}
+        }
+    }
+
+    /**
+     * Execute a prompt turn, connecting to or starting the persistent Unix socket daemon
+     */
+    public async executeTurn(sessionId: string, options: TurnOptions): Promise<TurnResult> {
+        const session = await this.getOrConnectSession(sessionId, options);
+
+        if (session.isBusy && session.currentResolve) {
+            throw new Error('A task is already running in this session. Send /agy_stop to cancel it.');
+        }
+
+        return new Promise<TurnResult>((resolve, reject) => {
+            session.isBusy = true;
+            session.accumulatedText = '';
+            session.activeOptions = options;
+            session.currentResolve = resolve;
+            session.currentReject = reject;
+
+            // Safety timeout (10 minutes)
+            if (session.safetyTimer) clearTimeout(session.safetyTimer);
+            session.safetyTimer = setTimeout(() => {
+                if (session.isBusy) {
+                    logger.warn(`[AgyStream] Turn timed out for session ${sessionId}. Stopping.`);
+                    this.stopSession(sessionId);
                 }
+            }, 10 * 60 * 1000);
 
-                existing.isBusy = true;
-                existing.accumulatedText = '';
-                existing.activeOptions = options;
-                existing.currentResolve = resolve;
-                existing.currentReject = reject;
+            // Send prompt action to daemon
+            const payload = JSON.stringify({
+                action: 'user_prompt',
+                prompt: options.prompt,
+                conversationId: options.conversationId,
+            }) + '\n';
 
-                // Safety timeout for this turn (10 minutes)
-                existing.safetyTimer = setTimeout(() => {
-                    if (existing.isBusy) {
-                        logger.warn(`[AgyStream] Turn timed out for session ${sessionId}. Stopping process.`);
-                        this.stopSession(sessionId);
-                    }
-                }, 10 * 60 * 1000);
-
-                // Write next turn into warm process's stdin
-                const inputMessage = JSON.stringify({
-                    event: 'user',
-                    message: {
-                        content: options.prompt,
-                    },
-                }) + '\n';
-
-                existing.proc.stdin?.write(inputMessage, 'utf-8');
-                return;
-            }
-
-            // 3. Otherwise, kill any stale session and spawn a new warm process
-            if (existing) {
-                this.stopSession(sessionId);
-            }
-
-            this.spawnNewSession(sessionId, options, resolve, reject);
+            session.socket.write(payload, 'utf-8');
         });
     }
 
-    private spawnNewSession(
+    private async getOrConnectSession(
         sessionId: string,
-        options: TurnOptions,
-        resolve: (res: TurnResult) => void,
-        reject: (err: any) => void
-    ): void {
-        const args = [
-            '--input-format', 'stream-json',
-            '--output-format', 'stream-json',
-        ];
+        options: TurnOptions
+    ): Promise<ActiveSocketSession> {
+        const paths = getSessionPaths(sessionId);
 
-        if (options.conversationId) {
-            args.push('--conversation', options.conversationId);
+        // 1. Check in-memory active session
+        const inMem = this.sessions.get(sessionId);
+        if (inMem && !inMem.socket.destroyed) {
+            const sameWorkspace = inMem.workspacePath === options.workspacePath;
+            const sameModel = !options.model || inMem.model === options.model;
+            if (sameWorkspace && sameModel) {
+                return inMem;
+            }
+            // Workspace or model changed: stop the old daemon
+            this.stopSession(sessionId);
         }
 
-        if (options.autoApprove) {
-            args.push('--dangerously-skip-permissions');
+        // 2. Try connecting to existing Unix Domain Socket
+        const existingSocket = await this.tryConnectSocket(paths.socketPath);
+        if (existingSocket) {
+            let daemonState: any = null;
+            try {
+                if (fs.existsSync(paths.statePath)) {
+                    daemonState = JSON.parse(fs.readFileSync(paths.statePath, 'utf-8'));
+                }
+            } catch {}
+
+            const sameWorkspace = !daemonState || daemonState.workspacePath === options.workspacePath;
+            const sameModel = !options.model || !daemonState?.model || daemonState.model === options.model;
+
+            if (sameWorkspace && sameModel) {
+                logger.info(`[AgyStream] Reconnected to existing Unix socket for session ${sessionId}`);
+                return this.setupSocketSession(sessionId, paths, existingSocket, options.workspacePath, daemonState?.conversationId || options.conversationId || '', daemonState?.model || options.model);
+            }
+
+            // Workspace or model mismatch: close existing and start clean
+            existingSocket.destroy();
+            this.stopSession(sessionId);
         }
 
-        if (options.model) {
-            args.push('--model', options.model);
-        }
+        // 3. Socket not running: launch detached sessionDaemon
+        await this.launchDaemon(sessionId, paths, options);
 
-        logger.info(`[AgyStream] Spawning new warm agy in "${options.workspacePath}" with args:`, args.join(' '));
+        const newSocket = await this.waitForSocket(paths.socketPath, 6000);
+        logger.info(`[AgyStream] Connected to newly spawned Unix socket for session ${sessionId}`);
+        return this.setupSocketSession(sessionId, paths, newSocket, options.workspacePath, options.conversationId || '', options.model);
+    }
 
-        const proc = spawn('agy', args, {
-            cwd: options.workspacePath,
-            env: {
-                ...process.env,
-                PAGER: 'cat',
-            },
-            stdio: ['pipe', 'pipe', 'pipe'],
+    private tryConnectSocket(socketPath: string): Promise<net.Socket | null> {
+        return new Promise((resolve) => {
+            if (!fs.existsSync(socketPath)) return resolve(null);
+
+            const socket = net.createConnection(socketPath, () => {
+                resolve(socket);
+            });
+
+            socket.once('error', () => {
+                socket.destroy();
+                resolve(null);
+            });
         });
+    }
 
-        const session: WarmSession = {
-            proc,
-            workspacePath: options.workspacePath,
-            currentConvId: options.conversationId || '',
-            isBusy: true,
-            idleTimer: null,
-            safetyTimer: null,
+    private waitForSocket(socketPath: string, timeoutMs: number): Promise<net.Socket> {
+        return new Promise((resolve, reject) => {
+            const startTime = Date.now();
+
+            const check = () => {
+                if (fs.existsSync(socketPath)) {
+                    const socket = net.createConnection(socketPath, () => {
+                        resolve(socket);
+                    });
+
+                    socket.once('error', () => {
+                        socket.destroy();
+                        if (Date.now() - startTime > timeoutMs) {
+                            reject(new Error(`Timed out waiting for socket ${socketPath}`));
+                        } else {
+                            setTimeout(check, 100);
+                        }
+                    });
+                    return;
+                }
+
+                if (Date.now() - startTime > timeoutMs) {
+                    reject(new Error(`Timed out waiting for socket file ${socketPath} to appear`));
+                } else {
+                    setTimeout(check, 100);
+                }
+            };
+
+            check();
+        });
+    }
+
+    private async launchDaemon(sessionId: string, paths: SessionPaths, options: TurnOptions): Promise<void> {
+        // Resolve path to sessionDaemon.js
+        let daemonScript = path.resolve(__dirname, 'sessionDaemon.js');
+        if (!fs.existsSync(daemonScript)) {
+            daemonScript = path.resolve(__dirname, '..', '..', 'dist', 'services', 'sessionDaemon.js');
+        }
+
+        if (!fs.existsSync(daemonScript)) {
+            throw new Error(`sessionDaemon.js not found at ${daemonScript}. Did you run npm run build?`);
+        }
+
+        logger.info(`[AgyStream] Spawning detached sessionDaemon for session ${sessionId}`);
+
+        const daemonProcess = spawn(
+            process.execPath,
+            [
+                daemonScript,
+                '--socket', paths.socketPath,
+                '--state', paths.statePath,
+                '--session', sessionId,
+                '--workspace', options.workspacePath,
+                '--conv', options.conversationId || '',
+                '--autoApprove', String(options.autoApprove ?? true),
+                '--model', options.model || '',
+                '--idle', String(this.idleTimeoutSeconds),
+            ],
+            {
+                detached: true,
+                stdio: 'ignore',
+                env: {
+                    ...process.env,
+                    PAGER: 'cat',
+                },
+            }
+        );
+
+        daemonProcess.unref();
+    }
+
+    private setupSocketSession(
+        sessionId: string,
+        paths: SessionPaths,
+        socket: net.Socket,
+        workspacePath: string,
+        conversationId: string,
+        model?: string
+    ): ActiveSocketSession {
+        const session: ActiveSocketSession = {
+            socket,
+            socketPath: paths.socketPath,
+            statePath: paths.statePath,
+            sessionId,
+            workspacePath,
+            currentConvId: conversationId,
+            model,
+            isBusy: false,
             accumulatedText: '',
-            activeOptions: options,
-            currentResolve: resolve,
-            currentReject: reject,
         };
 
         this.sessions.set(sessionId, session);
 
-        // Turn safety timeout (10 minutes)
-        session.safetyTimer = setTimeout(() => {
-            if (session.isBusy) {
-                logger.warn(`[AgyStream] Turn timed out for session ${sessionId}. Stopping process.`);
-                this.stopSession(sessionId);
-            }
-        }, 10 * 60 * 1000);
-
-        const rlOut = readline.createInterface({
-            input: proc.stdout,
+        const rl = readline.createInterface({
+            input: socket,
             crlfDelay: Infinity,
         });
 
-        const rlErr = readline.createInterface({
-            input: proc.stderr,
-            crlfDelay: Infinity,
-        });
-
-        rlErr.on('line', (line) => {
-            if (line.trim()) {
-                logger.warn(`[AgyStream STDERR] ${line}`);
-            }
-        });
-
-        rlOut.on('line', (line) => {
+        rl.on('line', (line) => {
             const trimmed = line.trim();
             if (!trimmed) return;
 
             try {
                 const event = JSON.parse(trimmed);
-                this.handleEvent(session, event);
+                this.handleDaemonEvent(session, event);
             } catch (err: any) {
-                logger.debug(`[AgyStream] Non-JSON line from stdout: ${trimmed}`);
+                logger.debug('[AgyStream] Non-JSON line from daemon socket:', trimmed);
             }
         });
 
-        proc.on('error', (err) => {
-            logger.error(`[AgyStream] Process error:`, err);
-            if (session.currentReject) {
-                session.currentReject(err);
-                session.currentReject = undefined;
-            }
-            this.stopSession(sessionId);
-        });
-
-        proc.on('close', (code, signal) => {
-            logger.info(`[AgyStream] Process closed with code ${code}, signal ${signal}`);
-            if (session.currentResolve) {
-                if (signal === 'SIGINT' || signal === 'SIGTERM') {
-                    session.currentResolve({
-                        status: 'STOPPED',
-                        response: session.accumulatedText || '<i>Task was stopped.</i>',
-                        durationSeconds: 0,
-                        conversationId: session.currentConvId,
-                    });
-                } else if (code !== 0) {
-                    session.currentReject?.(new Error(`agy process exited with code ${code}`));
-                } else {
-                    session.currentResolve({
-                        status: 'SUCCESS',
-                        response: session.accumulatedText,
-                        durationSeconds: 0,
-                        conversationId: session.currentConvId,
-                    });
-                }
-                session.currentResolve = undefined;
-                session.currentReject = undefined;
+        socket.on('close', () => {
+            logger.info(`[AgyStream] Socket closed for session ${sessionId}`);
+            if (session.currentResolve && session.isBusy) {
+                session.currentResolve({
+                    status: 'STOPPED',
+                    response: session.accumulatedText || '⚠️ Task was stopped or process closed.',
+                    durationSeconds: 0,
+                    conversationId: session.currentConvId,
+                });
             }
             this.sessions.delete(sessionId);
         });
 
-        // Write first prompt to stdin
-        const inputMessage = JSON.stringify({
-            event: 'user',
-            message: {
-                content: options.prompt,
-            },
-        }) + '\n';
+        socket.on('error', (err) => {
+            logger.warn(`[AgyStream] Socket error for session ${sessionId}:`, err.message);
+        });
 
-        proc.stdin.write(inputMessage, 'utf-8');
+        return session;
     }
 
-    private handleEvent(session: WarmSession, event: any): void {
+    private handleDaemonEvent(session: ActiveSocketSession, event: any): void {
         switch (event.event) {
-            case 'init':
+            case 'daemon_hello': {
+                if (event.state?.conversationId) {
+                    session.currentConvId = event.state.conversationId;
+                }
+                // If reconnecting to an ongoing turn, replay history
+                if (event.state?.isBusy && Array.isArray(event.history)) {
+                    session.isBusy = true;
+                    for (const ev of event.history) {
+                        if (ev.event === 'step_update') {
+                            const step = ev.step_update;
+                            if (step?.step_type === 'agent_response' && step.text_delta) {
+                                session.accumulatedText += step.text_delta;
+                            }
+                        }
+                    }
+                }
+                break;
+            }
+
+            case 'init': {
                 if (event.conversation_id) {
                     session.currentConvId = event.conversation_id;
                     session.activeOptions?.onInit?.(event.conversation_id);
                 }
                 break;
+            }
 
             case 'step_update': {
                 const step = event.step_update;
@@ -326,19 +431,6 @@ export class AgyStreamService {
                     session.currentResolve = undefined;
                     session.currentReject = undefined;
                 }
-
-                // Arm the idle timer to disconnect process if no further replies arrive
-                if (session.idleTimer) clearTimeout(session.idleTimer);
-                session.idleTimer = setTimeout(() => {
-                    logger.info(`[AgyStream] Idle timeout (${this.idleTimeoutMs / 1000}s) expired for session. Disconnecting warm process.`);
-                    for (const [key, val] of this.sessions.entries()) {
-                        if (val === session) {
-                            this.stopSession(key);
-                            break;
-                        }
-                    }
-                }, this.idleTimeoutMs);
-
                 break;
             }
 
@@ -346,4 +438,62 @@ export class AgyStreamService {
                 break;
         }
     }
+
+    /**
+     * Recover any in-flight turns that were running across a bot restart
+     */
+    public async recoverActiveSessions(
+        onTurnUpdate: (state: any, fullText: string) => Promise<void>,
+        onTurnComplete: (state: any, result: TurnResult) => Promise<void>
+    ): Promise<void> {
+        try {
+            const files = fs.readdirSync('/tmp');
+            for (const file of files) {
+                if (file.startsWith('magy_') && file.endsWith('.json')) {
+                    const statePath = path.join('/tmp', file);
+                    try {
+                        const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+                        if (state.isBusy && state.socketPath && fs.existsSync(state.socketPath)) {
+                            logger.info(`[AgyStream] Recovering in-flight session ${state.sessionId} (PID ${state.agyPid})`);
+
+                            const socket = await this.tryConnectSocket(state.socketPath);
+                            if (!socket) continue;
+
+                            const session = this.setupSocketSession(
+                                state.sessionId,
+                                { socketPath: state.socketPath, statePath, hash: file.slice(5, -5) },
+                                socket,
+                                state.workspacePath,
+                                state.conversationId
+                            );
+
+                            session.isBusy = true;
+                            let lastUpdate = 0;
+
+                            session.activeOptions = {
+                                workspacePath: state.workspacePath,
+                                prompt: '',
+                                onDelta: (_delta, fullText) => {
+                                    const now = Date.now();
+                                    if (now - lastUpdate > 1500) {
+                                        lastUpdate = now;
+                                        onTurnUpdate(state, fullText).catch(() => {});
+                                    }
+                                },
+                            };
+
+                            session.currentResolve = (result) => {
+                                onTurnComplete(state, result).catch((err) => {
+                                    logger.error('[AgyStream] Error in turn recovery completion:', err);
+                                });
+                            };
+                        }
+                    } catch {}
+                }
+            }
+        } catch (err: any) {
+            logger.warn('[AgyStream] Failed to scan /tmp for recoverable sessions:', err.message);
+        }
+    }
 }
+

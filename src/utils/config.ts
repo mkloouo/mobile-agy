@@ -67,7 +67,7 @@ export function loadConfig(): AppConfig {
         workspaceBaseDir,
         useTopics: process.env.USE_TOPICS !== 'false',
         autoApprove: process.env.AUTO_APPROVE !== 'false',
-        defaultModel: process.env.DEFAULT_MODEL,
+        defaultModel: process.env.DEFAULT_MODEL || 'gemini-3.8-flash-medium',
         dbPath,
         idleTimeoutSeconds,
     };
