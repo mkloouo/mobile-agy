@@ -606,6 +606,9 @@ export class AgyStreamService {
                                     logger.error('[AgyStream] Error in turn recovery completion:', err);
                                 });
                             };
+
+                            // Notify Telegram immediately that we have re-attached to the in-flight session
+                            onTurnUpdate(state, session.accumulatedText).catch(() => {});
                         }
                     } catch {}
                 }

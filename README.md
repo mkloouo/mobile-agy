@@ -115,6 +115,16 @@ pm2 save
 | `/topic <name>` | Rename current topic |
 | `/clear` | Clear active conversation in this topic (keeps workspace binding) — alias: `/reset` |
 
+#### Managing Active Workspaces & Context Isolation
+
+- **Bound Workspace (`/bind <path>`)**: The working directory where tools and commands run for the current topic.
+- **Active Workspaces**: Every directory the conversation has interacted with across its history. Google Antigravity accumulates these in the conversation transcript.
+- **How to Deactivate / Remove Old Workspaces**:
+  Antigravity CLI retains all visited workspaces for the lifetime of a conversation transcript. If an existing chat has accumulated multiple workspaces and you want the model to **stop checking other folders** and focus strictly on one:
+  1. Set your target folder: `/bind <path>` (e.g. `/bind ~/Projects/mobile-agy`).
+  2. Clear the conversation link: `/clear` (or create a new topic with `/new <name>`).
+  3. The very next prompt will start a fresh session isolated strictly to the bound folder. Check `/status` to confirm only one active workspace is attached.
+
 ### Context & Quota
 
 | Command | Action |

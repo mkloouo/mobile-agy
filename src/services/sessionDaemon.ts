@@ -160,8 +160,25 @@ function shutdown(): void {
     process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+// Daemon signal handlers: ignore SIGHUP; on SIGINT/SIGTERM, only shut down if idle!
+// If busy running a turn, survive so that the restarted bot process can re-attach.
+process.on('SIGHUP', () => {});
+
+process.on('SIGINT', () => {
+    if (!state.isBusy) {
+        shutdown();
+    } else {
+        console.log('[SessionDaemon] Ignoring SIGINT while busy to allow bot re-attachment.');
+    }
+});
+
+process.on('SIGTERM', () => {
+    if (!state.isBusy) {
+        shutdown();
+    } else {
+        console.log('[SessionDaemon] Ignoring SIGTERM while busy to allow bot re-attachment.');
+    }
+});
 
 // Spawn agy process
 const agyArgs = [
@@ -183,6 +200,7 @@ if (config.model) {
 
 agyProc = spawn('agy', agyArgs, {
     cwd: config.workspacePath,
+    detached: process.platform !== 'win32',
     env: {
         ...process.env,
         MOBILE_AGY_DAEMON_PID: String(process.pid),
