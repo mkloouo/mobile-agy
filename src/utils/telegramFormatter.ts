@@ -49,10 +49,45 @@ export function formatForTelegram(markdown: string): string {
     const result: string[] = [];
     let inCodeBlock = false;
     let codeBlockLang = '';
+    let inBlockquote = false;
 
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
+        let line = lines[i];
+        const isQuoteLine = /^>\s?/.test(line);
+
+        // If in blockquote and current line is not quote, close blockquote
+        if (inBlockquote && !isQuoteLine && !inCodeBlock) {
+            result.push('</blockquote>');
+            inBlockquote = false;
+        }
+
+        // If not in blockquote and line is quote, open blockquote
+        if (!inBlockquote && isQuoteLine) {
+            inBlockquote = true;
+            result.push('<blockquote>');
+        }
+
+        // Strip leading quote prefix if line is quoted
+        if (isQuoteLine) {
+            line = line.replace(/^>\s?/, '');
+        }
+
         const trimmed = line.trim();
+
+        // Handle GitHub-style callouts: [!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION]
+        const calloutMatch = trimmed.match(/^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/i);
+        if (calloutMatch) {
+            const kind = calloutMatch[1].toUpperCase();
+            const emojiMap: Record<string, string> = {
+                NOTE: '💡 <b>Note:</b>',
+                TIP: '💡 <b>Tip:</b>',
+                IMPORTANT: '⚠️ <b>Important:</b>',
+                WARNING: '⚠️ <b>Warning:</b>',
+                CAUTION: '🛑 <b>Caution:</b>',
+            };
+            result.push(emojiMap[kind] || `<b>${kind}:</b>`);
+            continue;
+        }
 
         if (trimmed.startsWith('```')) {
             inCodeBlock = !inCodeBlock;
@@ -80,6 +115,13 @@ export function formatForTelegram(markdown: string): string {
             const escaped = escapeHtml(line);
             result.push(formatMarkdownLine(escaped));
         }
+    }
+
+    if (inCodeBlock) {
+        result.push(codeBlockLang ? '</code></pre>' : '</pre>');
+    }
+    if (inBlockquote) {
+        result.push('</blockquote>');
     }
 
     return result.join('\n');

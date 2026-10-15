@@ -82,5 +82,16 @@ describe('telegramFormatter', () => {
             expect(formatted).toContain('<b>bold</b>');
             expect(formatted).toContain('<i>italic</i>');
         });
+
+        it('converts blockquotes and GitHub-style callouts with code blocks', () => {
+            const md = '> [!NOTE]\n> Changes compiled.\n> ```bash\n> pm2 restart\n> ```';
+            const formatted = formatForTelegram(md);
+            expect(formatted).toContain('<blockquote>');
+            expect(formatted).toContain('💡 <b>Note:</b>');
+            expect(formatted).toContain('Changes compiled.');
+            expect(formatted).toContain('<pre><code class="language-bash">');
+            expect(formatted).toContain('pm2 restart');
+            expect(formatted).toContain('</blockquote>');
+        });
     });
 });
