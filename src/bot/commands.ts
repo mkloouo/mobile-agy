@@ -492,11 +492,11 @@ ${wsSection}
         });
     });
 
-    // Command: /agy_bind, /bind <workspace>
-    bot.command(['agy_bind', 'bind'], async (ctx) => {
+    // Command: /agy_bind, /bind, /cd, /workspace <folder>
+    bot.command(['agy_bind', 'bind', 'cd', 'workspace'], async (ctx) => {
         const wsName = ctx.match?.trim();
         if (!wsName) {
-            return ctx.reply('Usage: <code>/agy_bind &lt;workspace_folder&gt;</code>', { parse_mode: 'HTML' });
+            return ctx.reply('Usage: <code>/bind &lt;workspace_folder_or_path&gt;</code>', { parse_mode: 'HTML' });
         }
 
         try {
@@ -504,12 +504,12 @@ ${wsSection}
             const channelKey = services.getChannelKey(ctx);
             const threadId = ctx.message?.message_thread_id;
 
-            db.bindWorkspace(channelKey, wsName, threadId);
-            await ctx.reply(`✅ Bound this topic to workspace: <b>${escapeHtml(wsName)}</b>\n<code>${fullPath}</code>`, {
+            db.bindWorkspace(channelKey, fullPath, threadId);
+            await ctx.reply(`✅ Bound this topic to workspace:\n<code>${escapeHtml(fullPath)}</code>`, {
                 parse_mode: 'HTML',
             });
         } catch (err: any) {
-            await ctx.reply(`❌ Error binding workspace: ${err.message}`);
+            await ctx.reply(`❌ Error binding workspace: ${escapeHtml(err.message)}`, { parse_mode: 'HTML' });
         }
     });
 

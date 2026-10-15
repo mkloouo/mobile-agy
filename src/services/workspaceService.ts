@@ -35,11 +35,24 @@ export class WorkspaceService {
     }
 
     public resolveWorkspace(nameOrRelative: string): string {
-        const resolved = path.resolve(this.baseDir, nameOrRelative);
-        // Security check against directory traversal outside baseDir
-        const relative = path.relative(this.baseDir, resolved);
-        if (relative.startsWith('..') || path.isAbsolute(relative)) {
-            throw new Error(`Path traversal detected: "${nameOrRelative}" is outside "${this.baseDir}"`);
+        if (!nameOrRelative) return this.baseDir;
+
+        let target = nameOrRelative.trim();
+        if (target.startsWith('~/') || target === '~') {
+            target = path.join(process.env.HOME || '', target.slice(1));
+        }
+
+        if (path.isAbsolute(target)) {
+            const resolved = path.resolve(target);
+            if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+                throw new Error(`Directory does not exist: "${resolved}"`);
+            }
+            return resolved;
+        }
+
+        const resolved = path.resolve(this.baseDir, target);
+        if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+            throw new Error(`Directory does not exist: "${resolved}"`);
         }
         return resolved;
     }
