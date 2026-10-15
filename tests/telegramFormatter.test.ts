@@ -7,6 +7,7 @@ import {
     splitTelegramHtml,
     formatForTelegram,
     formatHumanDate,
+    formatElapsedTime,
     cleanModelResponse,
 } from '../src/utils/telegramFormatter';
 
@@ -147,6 +148,15 @@ describe('telegramFormatter', () => {
             expect(cleaned).toContain('I have started the build in tmyway-app.');
             expect(cleaned).toContain('What happened in release-problem.txt');
             expect(cleaned).toContain('1. The compiler warnings are standard Kotlin deprecations.');
+        });
+    });
+
+    describe('formatElapsedTime', () => {
+        it('formats elapsed seconds as Xh XXm XXs', () => {
+            expect(formatElapsedTime(0)).toBe('0h 00m 00s');
+            expect(formatElapsedTime(10)).toBe('0h 00m 10s');
+            expect(formatElapsedTime(80)).toBe('0h 01m 20s');
+            expect(formatElapsedTime(3665)).toBe('1h 01m 05s');
         });
     });
 });

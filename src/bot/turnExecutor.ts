@@ -7,6 +7,7 @@ import {
     decodeHtmlEntities,
     describeToolAction,
     escapeHtml,
+    formatElapsedTime,
     formatForTelegram,
     splitTelegramHtml,
 } from '../utils/telegramFormatter';
@@ -62,6 +63,9 @@ export async function executeTurnWithStatus(
             displayText += `\n\n<b>Active Background:</b>\n${taskBadges}`;
         }
 
+        const elapsedSec = Math.max(0, Math.floor((now - startTime) / 1000));
+        displayText += `\n\n⏱️ <i>Actively working: ${formatElapsedTime(elapsedSec)}</i>`;
+
         try {
             await bot.api.editMessageText(
                 chatId,
@@ -78,6 +82,11 @@ export async function executeTurnWithStatus(
             }
         }
     };
+
+    // Update timer every 10 seconds so user sees stable progress
+    const progressInterval = setInterval(() => {
+        updateTelegramStatus(true);
+    }, 10000);
 
     try {
         const session = db.getSession(channelKey);
@@ -261,6 +270,7 @@ export async function executeTurnWithStatus(
             } catch {}
         }
     } finally {
+        clearInterval(progressInterval);
         if (!pendingAskQuestionParams) {
             services.processNextQueuedTurn(channelKey);
         }

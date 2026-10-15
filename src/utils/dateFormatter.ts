@@ -25,6 +25,17 @@ export function formatRelativeTime(dateStr: string): string {
 }
 
 /**
+ * Format elapsed seconds as Xh XXm XXs (e.g. 0h 01m 20s, 1h 05m 12s)
+ */
+export function formatElapsedTime(elapsedSeconds: number): string {
+    const totalSec = Math.max(0, Math.floor(elapsedSeconds));
+    const hours = Math.floor(totalSec / 3600);
+    const minutes = Math.floor((totalSec % 3600) / 60);
+    const seconds = totalSec % 60;
+    return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+}
+
+/**
  * Format a date or ISO/SQLite timestamp into human-readable local machine time.
  * Example: Wed, 13th of Aug, 2026 22:40
  */
