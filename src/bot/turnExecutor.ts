@@ -17,6 +17,7 @@ export async function executeTurnWithStatus(
 ): Promise<void> {
     const { bot, db, config, agyService } = services;
     agyService.setTelegramStatus(channelKey, statusMsgId, chatId, threadId);
+    bot.api.pinChatMessage(chatId, statusMsgId, { disable_notification: true }).catch(() => {});
 
     const startTime = Date.now();
     let lastEditTime = Date.now();
@@ -216,6 +217,7 @@ export async function executeTurnWithStatus(
         }
     } finally {
         clearInterval(progressInterval);
+        bot.api.unpinChatMessage(chatId, statusMsgId).catch(() => {});
         if (!pendingAskQuestionParams) {
             services.processNextQueuedTurn(channelKey);
         }

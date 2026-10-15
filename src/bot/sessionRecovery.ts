@@ -167,6 +167,10 @@ export function registerSessionRecovery(services: BotServices): void {
             } finally {
                 activeToolInfos.delete(channelKey);
                 completedActionsMap.delete(channelKey);
+                bot.api.unpinChatMessage(state.chatId, state.statusMessageId).catch(() => {});
+                services.processNextQueuedTurn(channelKey).catch((err) => {
+                    logger.error('[Bot] Error processing queued turn after recovery:', err);
+                });
             }
         }
     ).catch((err) => {
