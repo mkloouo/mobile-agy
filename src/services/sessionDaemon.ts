@@ -72,6 +72,11 @@ if (fs.existsSync(config.socketPath)) {
 let idleTimer: NodeJS.Timeout | null = null;
 let agyProc: ChildProcess | null = null;
 
+function log(...args: any[]): void {
+    const ts = new Date().toISOString();
+    console.log(`[${ts}] [SessionDaemon:${config.sessionId}]`, ...args);
+}
+
 function resetIdleTimer(): void {
     if (idleTimer) {
         clearTimeout(idleTimer);
@@ -80,13 +85,14 @@ function resetIdleTimer(): void {
 
     if (!state.isBusy) {
         idleTimer = setTimeout(() => {
-            console.log(`[SessionDaemon] Idle timeout (${config.idleTimeoutSeconds}s) reached. Shutting down.`);
+            log(`Idle timeout (${config.idleTimeoutSeconds}s) reached. Shutting down.`);
             shutdown();
         }, config.idleTimeoutSeconds * 1000);
     }
 }
 
 function shutdown(): void {
+    log(`Shutdown initiated for daemon PID ${process.pid}`);
     if (idleTimer) clearTimeout(idleTimer);
 
     try {
@@ -110,22 +116,25 @@ process.on('SIGHUP', () => {});
 
 process.on('SIGINT', () => {
     if (!state.isBusy) {
+        log('Received SIGINT while idle: shutting down.');
         shutdown();
     } else {
-        console.log('[SessionDaemon] Ignoring SIGINT while busy to allow bot re-attachment.');
+        log('Ignoring SIGINT while busy to allow bot re-attachment.');
     }
 });
 
 process.on('SIGTERM', () => {
     if (!state.isBusy) {
+        log('Received SIGTERM while idle: shutting down.');
         shutdown();
     } else {
-        console.log('[SessionDaemon] Ignoring SIGTERM while busy to allow bot re-attachment.');
+        log('Ignoring SIGTERM while busy to allow bot re-attachment.');
     }
 });
 
 // Spawn agy process
 const agyArgs = buildAgyArgs(config);
+log(`Spawning agy in ${config.workspacePath} with args: ${agyArgs.join(' ')}`);
 
 agyProc = spawn('agy', agyArgs, {
     cwd: config.workspacePath,
@@ -140,6 +149,7 @@ agyProc = spawn('agy', agyArgs, {
 });
 
 state.agyPid = agyProc.pid || 0;
+log(`Spawned agy process PID: ${state.agyPid}`);
 saveState();
 
 let stderrBuffer = '';
@@ -172,10 +182,12 @@ rlOut.on('line', (line) => {
 
         if (event.event === 'init' && event.conversation_id) {
             state.conversationId = event.conversation_id;
+            log(`agy initialized: convId=${event.conversation_id}`);
             saveState();
         } else if (event.event === 'result') {
             state.isBusy = false;
             state.lastResult = event.result;
+            log(`agy turn completed: status=${event.result?.status}, duration=${event.result?.duration_seconds}s`);
             saveState();
             resetIdleTimer();
         }
@@ -192,7 +204,7 @@ rlOut.on('line', (line) => {
 });
 
 agyProc.on('close', (code, signal) => {
-    console.log(`[SessionDaemon] agy exited with code ${code}, signal ${signal}`);
+    log(`agy exited with code ${code}, signal ${signal}`);
     const isError = (code !== 0 && code !== null) && !signal;
     let errMsg = '';
     if (isError) {
@@ -219,6 +231,7 @@ agyProc.on('close', (code, signal) => {
 // Create Unix Domain Socket Server
 const server = net.createServer((socket) => {
     connectedClients.add(socket);
+    log(`Bot connected to Unix socket. Total clients: ${connectedClients.size}`);
 
     // Send hello handshake with current state and recent events history
     socket.write(JSON.stringify({
@@ -249,6 +262,7 @@ const server = net.createServer((socket) => {
                     if (msg.threadId) state.threadId = msg.threadId;
                     if (idleTimer) clearTimeout(idleTimer);
                     recentEvents.length = 0; // reset history for new turn
+                    log(`Received user_prompt (len: ${msg.prompt?.length}, statusMsgId: ${msg.statusMessageId}, threadId: ${msg.threadId})`);
                     saveState();
 
                     const promptPayload = JSON.stringify({
@@ -263,6 +277,7 @@ const server = net.createServer((socket) => {
                 }
 
                 case 'stop': {
+                    log('Received stop command: sending SIGINT to agyProc');
                     if (agyProc && !agyProc.killed) {
                         agyProc.kill('SIGINT');
                     }
@@ -271,6 +286,7 @@ const server = net.createServer((socket) => {
 
                 case 'restart':
                 case 'shutdown': {
+                    log(`Received ${msg.action} command: shutting down`);
                     shutdown();
                     break;
                 }
@@ -279,12 +295,14 @@ const server = net.createServer((socket) => {
                     state.statusMessageId = msg.statusMessageId;
                     state.chatId = msg.chatId;
                     state.threadId = msg.threadId;
+                    log(`Received set_telegram_status: statusMsgId=${msg.statusMessageId}, chatId=${msg.chatId}`);
                     saveState();
                     break;
                 }
 
                 case 'mark_delivered': {
                     state.turnDelivered = true;
+                    log('Received mark_delivered: marked turnDelivered=true');
                     saveState();
                     break;
                 }
@@ -302,21 +320,23 @@ const server = net.createServer((socket) => {
                     break;
             }
         } catch (err: any) {
-            console.error('[SessionDaemon] Error handling socket command:', err);
+            log('Error handling socket command:', err?.message || err);
         }
     });
 
     socket.on('close', () => {
         connectedClients.delete(socket);
+        log(`Bot disconnected from Unix socket. Remaining clients: ${connectedClients.size}, isBusy: ${state.isBusy}`);
         resetIdleTimer();
     });
 
     socket.on('error', (err) => {
         connectedClients.delete(socket);
+        log('Socket client error:', err.message);
     });
 });
 
 server.listen(config.socketPath, () => {
-    console.log(`[SessionDaemon] Listening on Unix socket ${config.socketPath} for session ${config.sessionId}`);
+    log(`Listening on Unix socket ${config.socketPath}`);
     resetIdleTimer();
 });

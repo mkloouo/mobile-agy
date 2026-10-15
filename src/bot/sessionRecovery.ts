@@ -17,6 +17,7 @@ export function registerSessionRecovery(services: BotServices): void {
     agyService.recoverActiveSessions(
         async (state) => {
             if (!state.chatId || !state.statusMessageId) return;
+            logger.info(`[Bot] Re-attaching and updating Telegram status message for session ${state.sessionId}`);
             try {
                 await bot.api.editMessageText(
                     state.chatId,
@@ -24,10 +25,13 @@ export function registerSessionRecovery(services: BotServices): void {
                     '🧠 <i>Antigravity is working (reconnected)...</i>',
                     { parse_mode: 'HTML' }
                 );
-            } catch {}
+            } catch (err: any) {
+                logger.warn(`[Bot] Failed to update status message on reconnect (${state.sessionId}):`, err.message);
+            }
         },
         async (state, result) => {
             if (!state.chatId || !state.statusMessageId) return;
+            logger.info(`[Bot] Completing recovered turn for session ${state.sessionId} (status: ${result.status})`);
             try {
                 if (result.conversationId) {
                     db.saveSession(state.sessionId, state.workspacePath, result.conversationId, state.threadId);

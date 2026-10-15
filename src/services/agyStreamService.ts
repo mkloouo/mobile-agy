@@ -305,13 +305,19 @@ export class AgyStreamService {
 
     private tryConnectSocket(socketPath: string): Promise<net.Socket | null> {
         return new Promise((resolve) => {
-            if (!fs.existsSync(socketPath)) return resolve(null);
+            if (!fs.existsSync(socketPath)) {
+                logger.debug(`[AgyStream] Unix socket not found: ${socketPath}`);
+                return resolve(null);
+            }
 
+            logger.info(`[AgyStream] Connecting to Unix socket: ${socketPath}`);
             const socket = net.createConnection(socketPath, () => {
+                logger.info(`[AgyStream] Connected to Unix socket: ${socketPath}`);
                 resolve(socket);
             });
 
-            socket.once('error', () => {
+            socket.once('error', (err) => {
+                logger.warn(`[AgyStream] Unix socket connection failed (${socketPath}): ${err.message}`);
                 socket.destroy();
                 resolve(null);
             });
@@ -325,6 +331,7 @@ export class AgyStreamService {
             const check = () => {
                 if (fs.existsSync(socketPath)) {
                     const socket = net.createConnection(socketPath, () => {
+                        logger.info(`[AgyStream] Connected to newly created Unix socket: ${socketPath}`);
                         resolve(socket);
                     });
 
@@ -361,32 +368,38 @@ export class AgyStreamService {
             throw new Error(`sessionDaemon.js not found at ${daemonScript}. Did you run npm run build?`);
         }
 
-        logger.info(`[AgyStream] Spawning detached sessionDaemon for session ${sessionId}`);
+        const logPath = paths.statePath.replace(/\.json$/, '.log');
+        logger.info(`[AgyStream] Spawning detached sessionDaemon for session ${sessionId} (log: ${logPath})`);
 
-        const daemonProcess = spawn(
-            process.execPath,
-            [
-                daemonScript,
-                '--socket', paths.socketPath,
-                '--state', paths.statePath,
-                '--session', sessionId,
-                '--workspace', options.workspacePath,
-                '--conv', options.conversationId || '',
-                '--autoApprove', String(options.autoApprove ?? true),
-                '--model', options.model || '',
-                '--idle', String(this.idleTimeoutSeconds),
-            ],
-            {
+        const daemonArgs = [
+            daemonScript,
+            '--socket', paths.socketPath,
+            '--state', paths.statePath,
+            '--session', sessionId,
+            '--workspace', options.workspacePath,
+            '--conv', options.conversationId || '',
+            '--autoApprove', String(options.autoApprove ?? true),
+            '--model', options.model || '',
+            '--idle', String(this.idleTimeoutSeconds),
+        ];
+
+        if (process.platform === 'win32') {
+            const daemonProcess = spawn(process.execPath, daemonArgs, {
                 detached: true,
                 stdio: 'ignore',
-                env: {
-                    ...process.env,
-                    PAGER: 'cat',
-                },
-            }
-        );
-
-        daemonProcess.unref();
+            });
+            daemonProcess.unref();
+        } else {
+            // Double-fork via /bin/sh so sessionDaemon is reparented to PID 1 (launchd / init).
+            // This prevents PM2 tree-kill from sending SIGINT to sessionDaemon and agy on restarts,
+            // and captures all daemon stdout/stderr in logPath.
+            const cmd = `("${process.execPath}" ${daemonArgs.map((a) => JSON.stringify(a)).join(' ')} </dev/null >>${JSON.stringify(logPath)} 2>&1) &`;
+            const launcher = spawn('/bin/sh', ['-c', cmd], {
+                detached: true,
+                stdio: 'ignore',
+            });
+            launcher.unref();
+        }
     }
 
     private setupSocketSession(
@@ -546,13 +559,19 @@ export class AgyStreamService {
         onTurnComplete: (state: any, result: TurnResult) => Promise<void>
     ): Promise<void> {
         try {
+            logger.info('[AgyStream] Scanning /tmp for recoverable sessions...');
             const files = fs.readdirSync('/tmp');
             for (const file of files) {
                 if (file.startsWith('magy_') && file.endsWith('.json')) {
                     const statePath = path.join('/tmp', file);
                     try {
                         const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
-                        if (!state.chatId || !state.statusMessageId) continue;
+                        logger.info(`[AgyStream] Found session state file ${file}: session=${state.sessionId}, isBusy=${state.isBusy}, conv=${state.conversationId}, delivered=${state.turnDelivered}`);
+
+                        if (!state.chatId || !state.statusMessageId) {
+                            logger.warn(`[AgyStream] Skipping recovery for ${state.sessionId}: missing chatId (${state.chatId}) or statusMessageId (${state.statusMessageId})`);
+                            continue;
+                        }
 
                         // 1. Finished while disconnected but not yet delivered to Telegram
                         if (state.lastResult && !state.turnDelivered) {
@@ -576,7 +595,10 @@ export class AgyStreamService {
                             logger.info(`[AgyStream] Recovering in-flight session ${state.sessionId} (PID ${state.agyPid})`);
 
                             const socket = await this.tryConnectSocket(state.socketPath);
-                            if (!socket) continue;
+                            if (!socket) {
+                                logger.warn(`[AgyStream] Could not connect to socket for in-flight session ${state.sessionId} (${state.socketPath})`);
+                                continue;
+                            }
 
                             const session = this.setupSocketSession(
                                 state.sessionId,
@@ -608,9 +630,12 @@ export class AgyStreamService {
                             };
 
                             // Notify Telegram immediately that we have re-attached to the in-flight session
+                            logger.info(`[AgyStream] Successfully re-attached to in-flight session ${state.sessionId}`);
                             onTurnUpdate(state, session.accumulatedText).catch(() => {});
                         }
-                    } catch {}
+                    } catch (parseErr: any) {
+                        logger.warn(`[AgyStream] Failed to parse session file ${file}:`, parseErr.message);
+                    }
                 }
             }
         } catch (err: any) {
