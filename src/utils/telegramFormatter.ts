@@ -40,6 +40,58 @@ function formatMarkdownLine(text: string): string {
 }
 
 /**
+ * Format a date or ISO/SQLite timestamp into human-readable local machine time.
+ * Example: Wed, 13th of Aug, 2026 22:40
+ */
+export function formatHumanDate(dateInput: string | number | Date): string {
+    if (!dateInput) return '';
+
+    let d: Date;
+    if (dateInput instanceof Date) {
+        d = dateInput;
+    } else if (typeof dateInput === 'number') {
+        d = new Date(dateInput);
+    } else {
+        const str = String(dateInput).trim();
+        // If string does not specify timezone (like SQLite 'YYYY-MM-DD HH:MM:SS' or ISO without offset),
+        // treat it as UTC so it properly converts to machine local timezone
+        const utcStr = str.includes('T')
+            ? (str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str) ? str : str + 'Z')
+            : str.replace(' ', 'T') + 'Z';
+        d = new Date(utcStr);
+        if (isNaN(d.getTime())) {
+            d = new Date(str);
+        }
+    }
+
+    if (isNaN(d.getTime())) return String(dateInput);
+
+    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    const weekday = weekdays[d.getDay()];
+    const day = d.getDate();
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+
+    const j = day % 10;
+    const k = day % 100;
+    let suffix = 'th';
+    if (j === 1 && k !== 11) {
+        suffix = 'st';
+    } else if (j === 2 && k !== 12) {
+        suffix = 'nd';
+    } else if (j === 3 && k !== 13) {
+        suffix = 'rd';
+    }
+
+    return `${weekday}, ${day}${suffix} of ${month}, ${year} ${hours}:${minutes}`;
+}
+
+/**
  * Format markdown text for Telegram HTML parse mode.
  */
 export function formatForTelegram(markdown: string): string {

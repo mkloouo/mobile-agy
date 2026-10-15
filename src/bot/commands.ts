@@ -3,7 +3,7 @@ import { InlineKeyboard } from 'grammy';
 import { BotServices } from './types';
 import { buildChatsUI, buildModelKeyboard, buildProjectsUI, buildStopKeyboard } from './keyboards';
 import { taskManager } from '../services/taskManager';
-import { escapeHtml, formatAccountQuota } from '../utils/telegramFormatter';
+import { escapeHtml, formatAccountQuota, formatHumanDate } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
 
 export function registerBotCommands(services: BotServices): void {
@@ -280,6 +280,8 @@ export function registerBotCommands(services: BotServices): void {
         }
 
         let wsSection = `• <b>Workspace:</b> <code>${ws}</code>`;
+        let timeSection = '';
+
         if (session?.conversationId) {
             const summary = convService.getSummary(session.conversationId);
             const convWorkspaces = summary?.workspacePaths || [];
@@ -289,13 +291,21 @@ export function registerBotCommands(services: BotServices): void {
             } else if (convWorkspaces.length === 1 && convWorkspaces[0] && convWorkspaces[0] !== ws) {
                 wsSection = `• <b>Bound Workspace:</b> <code>${ws}</code>\n• <b>Active Workspace:</b> <code>${convWorkspaces[0]}</code>`;
             }
+
+            if (summary?.lastModified) {
+                timeSection = `\n• <b>Last Active:</b> ${formatHumanDate(summary.lastModified)}`;
+            } else if (session.createdAt) {
+                timeSection = `\n• <b>Started:</b> ${formatHumanDate(session.createdAt)}`;
+            }
+        } else if (session?.createdAt) {
+            timeSection = `\n• <b>Started:</b> ${formatHumanDate(session.createdAt)}`;
         }
 
         const statusMsg = `
 <b>📊 Session Status</b>
 ${wsSection}
 • <b>Model:</b> <code>${escapeHtml(currentModel)}</code>
-• <b>Conversation:</b> <code>${session?.conversationId || 'Fresh'}</code>
+• <b>Conversation:</b> <code>${session?.conversationId || 'Fresh'}</code>${timeSection}
 • <b>Status:</b> ${isRunning ? '⚙️ Running task' : '💤 Idle (warm process)'}${queueLine}${taskSection}
         `.trim();
 

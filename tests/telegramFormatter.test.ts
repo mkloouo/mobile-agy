@@ -6,6 +6,7 @@ import {
     balanceHtmlTags,
     splitTelegramHtml,
     formatForTelegram,
+    formatHumanDate,
 } from '../src/utils/telegramFormatter';
 
 describe('telegramFormatter', () => {
@@ -92,6 +93,30 @@ describe('telegramFormatter', () => {
             expect(formatted).toContain('<pre><code class="language-bash">');
             expect(formatted).toContain('pm2 restart');
             expect(formatted).toContain('</blockquote>');
+        });
+    });
+
+    describe('formatHumanDate', () => {
+        it('formats UTC ISO timestamp into human-readable local time with ordinal suffixes', () => {
+            const date = new Date(2026, 7, 13, 22, 40); // 13 Aug 2026 22:40 local
+            const formatted = formatHumanDate(date);
+            expect(formatted).toBe('Thu, 13th of Aug, 2026 22:40');
+        });
+
+        it('formats 1st, 2nd, 3rd, 21st, 22nd, 23rd, 31st correctly', () => {
+            expect(formatHumanDate(new Date(2026, 0, 1, 10, 0))).toContain('1st of Jan, 2026');
+            expect(formatHumanDate(new Date(2026, 0, 2, 10, 0))).toContain('2nd of Jan, 2026');
+            expect(formatHumanDate(new Date(2026, 0, 3, 10, 0))).toContain('3rd of Jan, 2026');
+            expect(formatHumanDate(new Date(2026, 0, 21, 10, 0))).toContain('21st of Jan, 2026');
+            expect(formatHumanDate(new Date(2026, 0, 22, 10, 0))).toContain('22nd of Jan, 2026');
+            expect(formatHumanDate(new Date(2026, 0, 23, 10, 0))).toContain('23rd of Jan, 2026');
+            expect(formatHumanDate(new Date(2026, 0, 31, 10, 0))).toContain('31st of Jan, 2026');
+        });
+
+        it('parses SQLite UTC string and returns non-empty formatted string', () => {
+            const result = formatHumanDate('2026-10-15 13:38:58');
+            expect(result).toContain('of Oct, 2026');
+            expect(result).toMatch(/[0-9]{1,2}:[0-9]{2}$/);
         });
     });
 });
