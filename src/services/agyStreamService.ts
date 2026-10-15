@@ -125,6 +125,58 @@ export class AgyStreamService {
     }
 
     /**
+     * Terminate the warm session daemon and agy process completely so that
+     * the next turn launches a clean agy instance (reloading MCP configs, plugins, and env).
+     */
+    public async restartSession(sessionId: string): Promise<boolean> {
+        const paths = getSessionPaths(sessionId);
+        const inMem = this.sessions.get(sessionId);
+
+        logger.info(`[AgyStream] Restarting session daemon for ${sessionId}`);
+
+        let daemonPid: number | undefined;
+        let agyPid: number | undefined;
+
+        try {
+            if (fs.existsSync(paths.statePath)) {
+                const state = JSON.parse(fs.readFileSync(paths.statePath, 'utf-8'));
+                daemonPid = state.daemonPid;
+                agyPid = state.agyPid;
+            }
+        } catch {}
+
+        if (inMem) {
+            if (inMem.safetyTimer) clearTimeout(inMem.safetyTimer);
+            try {
+                inMem.socket.write(JSON.stringify({ action: 'shutdown' }) + '\n');
+            } catch {}
+            inMem.socket.destroy();
+            this.sessions.delete(sessionId);
+        }
+
+        // Brief grace period for clean shutdown
+        await new Promise((r) => setTimeout(r, 200));
+
+        // Fallback: terminate agy and daemon processes if still alive
+        if (agyPid) {
+            try { process.kill(agyPid, 'SIGTERM'); } catch {}
+        }
+        if (daemonPid) {
+            try { process.kill(daemonPid, 'SIGTERM'); } catch {}
+        }
+
+        // Clean up socket and state files
+        try {
+            if (fs.existsSync(paths.socketPath)) fs.unlinkSync(paths.socketPath);
+        } catch {}
+        try {
+            if (fs.existsSync(paths.statePath)) fs.unlinkSync(paths.statePath);
+        } catch {}
+
+        return true;
+    }
+
+    /**
      * Associate Telegram message ID with this session in state file (for reconnect recovery)
      */
     public setTelegramStatus(sessionId: string, statusMessageId: number, chatId: number, threadId?: number): void {

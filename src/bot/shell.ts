@@ -51,7 +51,7 @@ export async function handleShellCommand(ctx: Context, rawText: string, services
     let exitCode: number | null = null;
     let exitSignal: string | null = null;
 
-    const child = spawn(process.env.SHELL || '/bin/zsh', ['-c', shellCmd], {
+    const child = spawn(process.env.SHELL || '/bin/zsh', ['-i', '-c', shellCmd], {
         cwd: workspacePath,
         detached: true,
         env: { ...process.env, PAGER: 'cat' },

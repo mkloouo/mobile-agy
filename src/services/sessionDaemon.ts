@@ -317,6 +317,12 @@ const server = net.createServer((socket) => {
                     break;
                 }
 
+                case 'restart':
+                case 'shutdown': {
+                    shutdown();
+                    break;
+                }
+
                 case 'set_telegram_status': {
                     state.statusMessageId = msg.statusMessageId;
                     state.chatId = msg.chatId;

@@ -21,6 +21,7 @@ export function registerBotCommands(services: BotServices): void {
         { command: 'agy_clear', description: 'Reset conversation in this topic' },
         { command: 'agy_kill', description: 'Kill last running command or background server' },
         { command: 'agy_stop', description: 'Stop current running task' },
+        { command: 'agy_restart', description: 'Restart background session and reload tools' },
         { command: 'agy_status', description: 'Show session and execution status' },
         { command: 'agy_resume', description: 'Attach a conversation UUID' },
         { command: 'agy_bind', description: 'Bind topic to a workspace folder' },
@@ -55,6 +56,7 @@ export function registerBotCommands(services: BotServices): void {
 • <code>/agy_topic &lt;name&gt;</code> - Rename current topic
 • <code>/agy_usage</code> - Show account quota and limits
 • <code>/agy_stop</code> - Stop current running task
+• <code>/agy_restart</code> - Restart background session & reload tools
 • <code>/agy_status</code> - Show execution and session info
 • <code>! &lt;cmd&gt;</code> - Direct shell execution (e.g. <code>! git status</code>, <code>! nr start</code>)
 • <code>/agy_help</code> - Show this guide
@@ -262,9 +264,21 @@ export function registerBotCommands(services: BotServices): void {
                 runningTasks.map((t) => `• ⚙️ <b>${escapeHtml(t.name)}</b> (PID ${t.pid}${t.port ? ` · port ${t.port}` : ''})`).join('\n');
         }
 
+        let wsSection = `• <b>Workspace:</b> <code>${ws}</code>`;
+        if (session?.conversationId) {
+            const summary = convService.getSummary(session.conversationId);
+            const convWorkspaces = summary?.workspacePaths || [];
+            if (convWorkspaces.length > 1) {
+                wsSection = `• <b>Bound Workspace:</b> <code>${ws}</code>\n• <b>Active Workspaces (${convWorkspaces.length}):</b>\n` +
+                    convWorkspaces.map((w) => `  ▫️ <code>${w}</code>`).join('\n');
+            } else if (convWorkspaces.length === 1 && convWorkspaces[0] && convWorkspaces[0] !== ws) {
+                wsSection = `• <b>Bound Workspace:</b> <code>${ws}</code>\n• <b>Active Workspace:</b> <code>${convWorkspaces[0]}</code>`;
+            }
+        }
+
         const statusMsg = `
 <b>📊 Session Status</b>
-• <b>Workspace:</b> <code>${ws}</code>
+${wsSection}
 • <b>Model:</b> <code>${escapeHtml(currentModel)}</code>
 • <b>Conversation:</b> <code>${session?.conversationId || 'Fresh'}</code>
 • <b>Status:</b> ${isRunning ? '⚙️ Running task' : '💤 Idle (warm process)'}${queueLine}${taskSection}
@@ -349,6 +363,32 @@ export function registerBotCommands(services: BotServices): void {
                 message_thread_id: threadId,
             });
         }
+    });
+
+    // Command: /agy_restart, /restart - Restart warm session daemon and reload MCP tools/environment
+    bot.command(['agy_restart', 'restart'], async (ctx) => {
+        const threadId = ctx.message?.message_thread_id;
+        const channelKey = services.getChannelKey(ctx);
+        const session = db.getSession(channelKey);
+
+        const statusMsg = await ctx.reply('🔄 <i>Restarting session daemon...</i>', {
+            parse_mode: 'HTML',
+            message_thread_id: threadId,
+        });
+
+        await agyService.restartSession(channelKey);
+
+        const convText = session?.conversationId
+            ? `\n• <b>Conversation:</b> <code>${session.conversationId}</code> (preserved)`
+            : '';
+
+        const replyText = `✅ <b>Session Restarted</b>${convText}\n\nBackground daemon was stopped. Your next message will launch a fresh Antigravity session with updated MCP tools and environment.`;
+
+        await ctx.api.editMessageText(ctx.chat.id, statusMsg.message_id, replyText, {
+            parse_mode: 'HTML',
+        }).catch(async () => {
+            await ctx.reply(replyText, { parse_mode: 'HTML', message_thread_id: threadId });
+        });
     });
 
     // Command: /agy_new, /new [title] - Create a new topic & conversation

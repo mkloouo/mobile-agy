@@ -71,5 +71,30 @@ describe('shell execution & formatting', () => {
 
             expect(exitCode).toBe(7);
         });
+
+        it('supports interactive shell execution (-i -c)', async () => {
+            let output = '';
+            let exitCode: number | null = null;
+
+            await new Promise<void>((resolve, reject) => {
+                const child = spawn('/bin/zsh', ['-i', '-c', 'echo "interactive zsh works"'], {
+                    stdio: ['ignore', 'pipe', 'pipe'],
+                });
+
+                child.stdout.on('data', (d) => {
+                    output += d.toString('utf-8');
+                });
+
+                child.on('close', (code) => {
+                    exitCode = code;
+                    resolve();
+                });
+
+                child.on('error', reject);
+            });
+
+            expect(output.trim()).toContain('interactive zsh works');
+            expect(exitCode).toBe(0);
+        });
     });
 });

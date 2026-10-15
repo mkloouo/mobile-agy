@@ -8,6 +8,7 @@ export interface ConversationSummary {
     conversationId: string;
     title: string;
     workspacePath: string;
+    workspacePaths?: string[];
     lastModified: string;
 }
 
@@ -55,20 +56,13 @@ export class ConversationService {
             db.close();
 
             const items = rows.map((row) => {
-                let wsPath = '';
-                try {
-                    const parsed = JSON.parse(row.workspace_uris);
-                    if (Array.isArray(parsed) && parsed.length > 0) {
-                        wsPath = parsed[0].replace('file://', '');
-                    }
-                } catch {
-                    wsPath = '';
-                }
+                const { primary, all } = this.parseWorkspaceUris(row.workspace_uris);
 
                 return {
                     conversationId: row.conversation_id,
                     title: (row.title || 'Untitled Chat').replace(/^"(.*)"$/, '$1'),
-                    workspacePath: wsPath,
+                    workspacePath: primary,
+                    workspacePaths: all,
                     lastModified: row.last_modified,
                 };
             });
@@ -99,25 +93,38 @@ export class ConversationService {
 
             if (!row) return undefined;
 
-            let wsPath = '';
-            try {
-                const parsed = JSON.parse(row.workspace_uris);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    wsPath = parsed[0].replace('file://', '');
-                }
-            } catch {
-                wsPath = '';
-            }
+            const { primary, all } = this.parseWorkspaceUris(row.workspace_uris);
 
             return {
                 conversationId: row.conversation_id,
                 title: (row.title || 'Untitled Chat').replace(/^"(.*)"$/, '$1'),
-                workspacePath: wsPath,
+                workspacePath: primary,
+                workspacePaths: all,
                 lastModified: row.last_modified,
             };
         } catch (err: any) {
             logger.error(`[ConversationService] Error getting summary for ${conversationId}:`, err?.message || err);
             return undefined;
         }
+    }
+
+    private parseWorkspaceUris(rawJson: string | null | undefined): { primary: string; all: string[] } {
+        let primary = '';
+        const all: string[] = [];
+        if (!rawJson) return { primary, all };
+
+        try {
+            const parsed = JSON.parse(rawJson);
+            if (Array.isArray(parsed)) {
+                for (const item of parsed) {
+                    if (typeof item === 'string') {
+                        all.push(item.replace(/^file:\/\//, ''));
+                    }
+                }
+                if (all.length > 0) primary = all[0];
+            }
+        } catch {}
+
+        return { primary, all };
     }
 }
