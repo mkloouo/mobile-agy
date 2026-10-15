@@ -9,6 +9,7 @@ import {
     formatHumanDate,
     formatElapsedTime,
     cleanModelResponse,
+    sanitizeTelegramHtml,
 } from '../src/utils/telegramFormatter';
 
 describe('telegramFormatter', () => {
@@ -157,6 +158,27 @@ describe('telegramFormatter', () => {
             expect(formatElapsedTime(10)).toBe('0h 00m 10s');
             expect(formatElapsedTime(80)).toBe('0h 01m 20s');
             expect(formatElapsedTime(3665)).toBe('1h 01m 05s');
+        });
+    });
+
+    describe('sanitizeTelegramHtml', () => {
+        it('strips nested tags from inside code and pre blocks', () => {
+            const invalid = '<code><b>bold</b> inside code</i></code>';
+            const sanitized = sanitizeTelegramHtml(invalid);
+            expect(sanitized).toBe('<code>bold inside code</code>');
+        });
+
+        it('preserves code tags with language class inside pre', () => {
+            const pre = '<pre><code class="language-typescript">const x = 1;</code></pre>';
+            expect(sanitizeTelegramHtml(pre)).toBe(pre);
+        });
+
+        it('protects code blocks in markdown from internal bold/italic conversion', () => {
+            const md = 'Call `__init__` and `*ptr` to set values.';
+            const formatted = formatForTelegram(md);
+            expect(formatted).toContain('<code>__init__</code>');
+            expect(formatted).toContain('<code>*ptr</code>');
+            expect(formatted).not.toContain('<code><b>init</b></code>');
         });
     });
 });

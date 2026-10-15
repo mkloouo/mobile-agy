@@ -40,7 +40,7 @@ export async function handleShellCommand(ctx: Context, rawText: string, services
             taskManager.killProcess(t.pid);
         }
         const msg = runningTasks.length > 0 || wasAgyBusy
-            ? `🛑 <b>Cancelled:</b>\n${runningTasks.map((t) => `• Stopped ${t.name} (PID ${t.pid})`).join('\n')}`
+            ? `🛑 <b>Cancelled:</b>\n${runningTasks.map((t) => `• Stopped <b>${escapeHtml(t.name)}</b> (PID ${t.pid})`).join('\n')}`
             : 'No active command or background server running in this topic.';
         await ctx.reply(msg, { parse_mode: 'HTML', message_thread_id: threadId });
         return;

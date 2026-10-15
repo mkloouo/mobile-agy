@@ -9,6 +9,7 @@ import {
     escapeHtml,
     formatElapsedTime,
     formatForTelegram,
+    sanitizeTelegramHtml,
     splitTelegramHtml,
 } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
@@ -70,7 +71,7 @@ export async function executeTurnWithStatus(
             await bot.api.editMessageText(
                 chatId,
                 statusMsgId,
-                displayText,
+                sanitizeTelegramHtml(displayText),
                 { parse_mode: 'HTML', reply_markup: stopKeyboard }
             );
         } catch (err: any) {
@@ -184,7 +185,7 @@ export async function executeTurnWithStatus(
             await bot.api.editMessageText(
                 chatId,
                 statusMsgId,
-                statusDoneText,
+                sanitizeTelegramHtml(statusDoneText),
                 { parse_mode: 'HTML', reply_markup: stopKeyboard }
             );
         } catch (err: any) {

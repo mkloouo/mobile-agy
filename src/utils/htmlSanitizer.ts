@@ -59,12 +59,41 @@ export function balanceHtmlTags(html: string): { closedHtml: string; openTags: s
 }
 
 /**
+ * Sanitize and validate HTML for Telegram Bot API:
+ * 1. Strips any nested formatting tags (<b>, <i>, etc.) from inside <code> and <pre> blocks.
+ * 2. Balances all open tags so Telegram never rejects with "can't parse entities".
+ */
+export function sanitizeTelegramHtml(html: string): string {
+    if (!html) return '';
+
+    // Strip forbidden tags inside <pre>...</pre>
+    let cleaned = html.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (match) => {
+        const content = match.slice(match.indexOf('>') + 1, match.lastIndexOf('</pre>'));
+        const innerCleaned = content.replace(/<(?!(\/?code\b))[^>]+>/gi, '');
+        const preTag = match.slice(0, match.indexOf('>') + 1);
+        return `${preTag}${innerCleaned}</pre>`;
+    });
+
+    // Strip forbidden tags inside <code>...</code>
+    cleaned = cleaned.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (match) => {
+        const content = match.slice(match.indexOf('>') + 1, match.lastIndexOf('</code>'));
+        const innerCleaned = content.replace(/<[^>]+>/g, '');
+        const codeTag = match.slice(0, match.indexOf('>') + 1);
+        return `${codeTag}${innerCleaned}</code>`;
+    });
+
+    // Balance all unclosed tags
+    return balanceHtmlTags(cleaned).closedHtml;
+}
+
+/**
  * Split a long text or HTML into chunks below Telegram's 4096 character limit,
  * properly balancing and reopening HTML tags across chunk boundaries.
  */
 export function splitTelegramHtml(text: string, limit: number = 3900): string[] {
-    if (text.length <= limit) {
-        return [balanceHtmlTags(text).closedHtml];
+    const sanitized = sanitizeTelegramHtml(text);
+    if (sanitized.length <= limit) {
+        return [sanitized];
     }
 
     const chunks: string[] = [];

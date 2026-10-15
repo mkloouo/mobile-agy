@@ -10,9 +10,7 @@ export * from './quotaFormatter';
 function formatMarkdownLine(text: string): string {
     let result = text;
 
-    // Links: [text](url)
-    // 1) Web / tg links -> <a href="url">text</a>
-    // 2) file:/// or local filesystem links -> <code>text</code> (since mobile Telegram cannot open file://)
+    // 1. Links: [text](url)
     result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, linkText, url) => {
         const trimmedUrl = url.trim();
         const cleanText = linkText.replace(/^`+|`+$/g, '');
@@ -22,19 +20,30 @@ function formatMarkdownLine(text: string): string {
         return `<code>${cleanText}</code>`;
     });
 
-    // Inline code: `code`
-    result = result.replace(/`([^`]+)`/g, '<code>$1</code>');
+    // 2. Extract and protect inline code: `code`
+    const codeBlocks: string[] = [];
+    result = result.replace(/`([^`]+)`/g, (_match, codeContent) => {
+        const idx = codeBlocks.length;
+        codeBlocks.push(`<code>${codeContent}</code>`);
+        return `\x00CODE_${idx}\x00`;
+    });
 
-    // Bold: **text** or __text__
+    // 3. Bold: **text** or __text__
     result = result.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
     result = result.replace(/__(.+?)__/g, '<b>$1</b>');
 
-    // Italic: *text* or _text_
+    // 4. Italic: *text* or _text_
     result = result.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<i>$1</i>');
     result = result.replace(/(?<!\w)_([^_]+)_(?!\w)/g, '<i>$1</i>');
 
-    // Strikethrough: ~~text~~
+    // 5. Strikethrough: ~~text~~
     result = result.replace(/~~(.+?)~~/g, '<s>$1</s>');
+
+    // 6. Restore protected inline code
+    result = result.replace(/\x00CODE_(\d+)\x00/g, (_match, idxStr) => {
+        const idx = parseInt(idxStr, 10);
+        return codeBlocks[idx] || '';
+    });
 
     return result;
 }
