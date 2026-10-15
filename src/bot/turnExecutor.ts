@@ -48,7 +48,7 @@ export async function executeTurnWithStatus(
 
         if (activeToolInfo) {
             const activeDesc = describeToolAction(activeToolInfo.name, activeToolInfo.params, workspacePath, 'active');
-            displayText += `\n\n⚙️ <i>${escapeHtml(activeDesc)}...</i>`;
+            displayText += `\n\n⚙️ ${activeDesc}...`;
         }
 
         if (recentCompletedActions.length > 0) {

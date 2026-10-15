@@ -82,6 +82,8 @@ export function registerSessionRecovery(services: BotServices): void {
                     }
                 }
 
+                agyService.markTurnDelivered(state.sessionId);
+
                 if (result.conversationId) {
                     const questionParams = findRecentAskQuestion(result.conversationId);
                     if (questionParams) {
