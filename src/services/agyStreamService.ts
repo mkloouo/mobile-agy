@@ -555,7 +555,7 @@ export class AgyStreamService {
      * Recover any in-flight turns that were running across a bot restart
      */
     public async recoverActiveSessions(
-        onTurnUpdate: (state: any, fullText: string) => Promise<void>,
+        onTurnUpdate: (state: any, fullText: string, activeTool?: any, doneAction?: string) => Promise<void>,
         onTurnComplete: (state: any, result: TurnResult) => Promise<void>
     ): Promise<void> {
         try {
@@ -620,6 +620,12 @@ export class AgyStreamService {
                                         lastUpdate = now;
                                         onTurnUpdate(state, fullText).catch(() => {});
                                     }
+                                },
+                                onToolCall: (toolName, params) => {
+                                    onTurnUpdate(state, session.accumulatedText, { name: toolName, params }).catch(() => {});
+                                },
+                                onToolDone: (toolName) => {
+                                    onTurnUpdate(state, session.accumulatedText, null, toolName).catch(() => {});
                                 },
                             };
 
