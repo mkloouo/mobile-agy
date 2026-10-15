@@ -141,8 +141,18 @@ export async function executeTurnWithStatus(
         let formatted: string;
         const rawResponse = (result.response || lastRenderedText || '').trim();
 
-        if (result.status === 'ERROR') {
-            formatted = `❌ <b>Error:</b>\n${escapeHtml(rawResponse || 'Antigravity execution failed.')}`;
+        const isExplicitError =
+            rawResponse.startsWith('❌ Antigravity error:') ||
+            rawResponse.startsWith('❌ Antigravity process exited') ||
+            rawResponse.startsWith('agent executor error:') ||
+            rawResponse.includes('AGY_ERROR:') ||
+            rawResponse.startsWith('Fatal error:') ||
+            rawResponse.startsWith('panic:');
+
+        const isActualError = result.status === 'ERROR' && (!rawResponse || isExplicitError);
+
+        if (isActualError) {
+            formatted = `❌ <b>Error:</b>\n${escapeHtml(rawResponse || result.error || 'Antigravity execution failed.')}`;
             agyService.restartSession(channelKey).catch(() => {});
         } else if (userPrompt.trim().startsWith('/compact')) {
             formatted = '🗜️ <b>Conversation compacted.</b> Context window has been summarized and freed.';

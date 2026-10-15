@@ -24,6 +24,7 @@ export interface TurnOptions {
 export interface TurnResult {
     status: 'SUCCESS' | 'ERROR' | 'STOPPED';
     response: string;
+    error?: string;
     durationSeconds: number;
     usage?: any;
     conversationId: string;
@@ -498,6 +499,7 @@ export class AgyStreamService {
                 const resultPayload: TurnResult = {
                     status: event.result?.status || 'SUCCESS',
                     response: event.result?.response || session.accumulatedText,
+                    error: event.result?.error,
                     durationSeconds: event.result?.duration_seconds || 0,
                     usage: event.result?.usage,
                     conversationId: session.currentConvId || event.result?.conversation_id,
