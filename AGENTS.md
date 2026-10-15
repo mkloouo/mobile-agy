@@ -40,3 +40,5 @@ Enables headless, remote control and real-time streaming of Antigravity tasks wi
 3. **No File Bloat**: Keep source files modular and under 400 lines of code. Extract pure utilities and dedicated handlers.
 4. **Telegram Rate Limits (429)**: Status edits must be throttled (≥ 2.5s). Any final delivery or error message edit failure must gracefully fall back to `sendMessage` so responses are never lost or frozen in Telegram.
 5. **No Broken Shell Commands**: Direct shell execution (`! <cmd>`) must attach stdio and close listeners synchronously upon spawn, before any async network calls.
+6. **No Self-Restarts**: Agents must never restart the `mobile-agy` service or PM2 process (`pm2 restart`, `npm start`, etc.) themselves, as this abruptly terminates active agent sessions, subagents, and background tasks. If changes occurred that require a service restart, complete the build (`npm run build`) and output a clear reminder to the user to restart the service (e.g. `pm2 restart mobile-agy`).
+
