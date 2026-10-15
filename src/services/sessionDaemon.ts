@@ -4,71 +4,15 @@ import path from 'path';
 import readline from 'readline';
 import { spawn, ChildProcess } from 'child_process';
 
-interface DaemonArgs {
-    socketPath: string;
-    statePath: string;
-    sessionId: string;
-    workspacePath: string;
-    conversationId: string;
-    autoApprove: boolean;
-    model?: string;
-    idleTimeoutSeconds: number;
+import { DaemonArgs, DaemonState, parseDaemonArgs, buildAgyArgs } from './sessionDaemonUtils';
+
+let config: DaemonArgs;
+try {
+    config = parseDaemonArgs(process.argv.slice(2));
+} catch (err: any) {
+    console.error(err.message || err);
+    process.exit(1);
 }
-
-interface DaemonState {
-    sessionId: string;
-    socketPath: string;
-    statePath: string;
-    daemonPid: number;
-    agyPid: number;
-    workspacePath: string;
-    conversationId: string;
-    model?: string;
-    isBusy: boolean;
-    createdAt: number;
-    lastActiveAt: number;
-    statusMessageId?: number;
-    chatId?: number;
-    threadId?: number;
-    lastResult?: any;
-    turnDelivered?: boolean;
-}
-
-// Parse command line arguments
-function parseArgs(): DaemonArgs {
-    const args = process.argv.slice(2);
-    const getArg = (flag: string): string => {
-        const idx = args.indexOf(flag);
-        return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : '';
-    };
-
-    const socketPath = getArg('--socket');
-    const statePath = getArg('--state');
-    const sessionId = getArg('--session');
-    const workspacePath = getArg('--workspace');
-    const conversationId = getArg('--conv');
-    const autoApprove = getArg('--autoApprove') !== 'false';
-    const model = getArg('--model') || undefined;
-    const idleTimeoutSeconds = parseInt(getArg('--idle') || '300', 10) || 300;
-
-    if (!socketPath || !sessionId || !workspacePath) {
-        console.error('Usage: sessionDaemon --socket <path> --state <path> --session <id> --workspace <path>');
-        process.exit(1);
-    }
-
-    return {
-        socketPath,
-        statePath,
-        sessionId,
-        workspacePath,
-        conversationId,
-        autoApprove,
-        model,
-        idleTimeoutSeconds,
-    };
-}
-
-const config = parseArgs();
 
 const state: DaemonState = {
     sessionId: config.sessionId,
@@ -181,22 +125,7 @@ process.on('SIGTERM', () => {
 });
 
 // Spawn agy process
-const agyArgs = [
-    '--input-format', 'stream-json',
-    '--output-format', 'stream-json',
-];
-
-if (config.conversationId) {
-    agyArgs.push('--conversation', config.conversationId);
-}
-
-if (config.autoApprove) {
-    agyArgs.push('--dangerously-skip-permissions');
-}
-
-if (config.model) {
-    agyArgs.push('--model', config.model);
-}
+const agyArgs = buildAgyArgs(config);
 
 agyProc = spawn('agy', agyArgs, {
     cwd: config.workspacePath,
