@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     escapeHtml,
+    decodeHtmlEntities,
     stripAnsi,
     balanceHtmlTags,
     splitTelegramHtml,
@@ -8,9 +9,13 @@ import {
 } from '../src/utils/telegramFormatter';
 
 describe('telegramFormatter', () => {
-    describe('escapeHtml', () => {
+    describe('escapeHtml and decodeHtmlEntities', () => {
         it('escapes &, <, and >', () => {
             expect(escapeHtml('Hello & <world>')).toBe('Hello &amp; &lt;world&gt;');
+        });
+
+        it('decodes &amp;, &lt;, &gt;, &quot;, &#39;', () => {
+            expect(decodeHtmlEntities('Hello &amp; &lt;world&gt; &quot;test&#39;')).toBe('Hello & <world> "test\'');
         });
     });
 

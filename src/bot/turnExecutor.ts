@@ -1,8 +1,10 @@
 import { BotServices } from './types';
 import { taskManager } from '../services/taskManager';
 import { buildStopKeyboard } from './keyboards';
+import { presentQuestion } from './questionHandler';
 import {
     balanceHtmlTags,
+    decodeHtmlEntities,
     describeToolAction,
     escapeHtml,
     formatForTelegram,
@@ -26,6 +28,7 @@ export async function executeTurnWithStatus(
     let lastRenderedText = '';
     let rateLimitUntil = 0;
     let activeToolInfo: { name: string; params: any } | null = null;
+    let pendingAskQuestionParams: any = null;
     const recentCompletedActions: string[] = [];
 
     const updateTelegramStatus = async (force: boolean = false) => {
@@ -103,6 +106,9 @@ export async function executeTurnWithStatus(
             },
             onToolCall: (toolName, params) => {
                 activeToolInfo = { name: toolName, params };
+                if (toolName === 'ask_question') {
+                    pendingAskQuestionParams = params;
+                }
                 updateTelegramStatus(false);
             },
             onToolDone: (toolName, _output) => {
@@ -135,10 +141,17 @@ export async function executeTurnWithStatus(
         let formatted: string;
         const rawResponse = (result.response || lastRenderedText || '').trim();
 
-        if (userPrompt.trim().startsWith('/compact')) {
+        if (result.status === 'ERROR') {
+            formatted = `❌ <b>Error:</b>\n${escapeHtml(rawResponse || 'Antigravity execution failed.')}`;
+            agyService.restartSession(channelKey).catch(() => {});
+        } else if (userPrompt.trim().startsWith('/compact')) {
             formatted = '🗜️ <b>Conversation compacted.</b> Context window has been summarized and freed.';
         } else if (!rawResponse) {
-            formatted = '✓ <i>Done.</i>';
+            if (recentCompletedActions.length > 0) {
+                formatted = '✓ <b>Completed:</b>\n' + recentCompletedActions.map((a) => `• ✓ ${a}`).join('\n');
+            } else {
+                formatted = '✓ <i>Done.</i>';
+            }
         } else {
             formatted = formatForTelegram(rawResponse);
         }
@@ -171,7 +184,7 @@ export async function executeTurnWithStatus(
                     await bot.api.editMessageText(
                         chatId,
                         statusMsgId,
-                        chunks[0].replace(/<[^>]+>/g, '').slice(0, 4000),
+                        decodeHtmlEntities(chunks[0].replace(/<[^>]+>/g, '')).slice(0, 4000),
                         { reply_markup: stopKeyboard }
                     );
                     deliverySucceeded = true;
@@ -192,7 +205,7 @@ export async function executeTurnWithStatus(
                     reply_markup: stopKeyboard,
                 });
             } catch {
-                await bot.api.sendMessage(chatId, chunks[0].replace(/<[^>]+>/g, '').slice(0, 4000), {
+                await bot.api.sendMessage(chatId, decodeHtmlEntities(chunks[0].replace(/<[^>]+>/g, '')).slice(0, 4000), {
                     message_thread_id: threadId,
                     reply_markup: stopKeyboard,
                 });
@@ -208,12 +221,28 @@ export async function executeTurnWithStatus(
                 });
             } catch (replyErr: any) {
                 if (replyErr.message?.includes("can't parse entities")) {
-                    await bot.api.sendMessage(chatId, chunks[i].replace(/<[^>]+>/g, '').slice(0, 4000), {
+                    await bot.api.sendMessage(chatId, decodeHtmlEntities(chunks[i].replace(/<[^>]+>/g, '')).slice(0, 4000), {
                         message_thread_id: threadId,
                     });
                 } else {
                     logger.error('[Bot] Failed to send chunk reply:', replyErr);
                 }
+            }
+        }
+
+        // If the model called ask_question, present the question dialog with option buttons
+        if (pendingAskQuestionParams) {
+            try {
+                await presentQuestion(
+                    services,
+                    channelKey,
+                    workspacePath,
+                    chatId,
+                    threadId,
+                    pendingAskQuestionParams
+                );
+            } catch (qErr: any) {
+                logger.error('[Bot] Failed to present question dialog:', qErr);
             }
         }
 
@@ -244,7 +273,9 @@ export async function executeTurnWithStatus(
             } catch {}
         }
     } finally {
-        services.processNextQueuedTurn(channelKey);
+        if (!pendingAskQuestionParams) {
+            services.processNextQueuedTurn(channelKey);
+        }
     }
 }
 

@@ -73,6 +73,14 @@ export function describeToolAction(
         return isDone ? 'Read web page' : 'Reading web page';
     }
 
+    if (toolName === 'ask_question') {
+        const firstQ = params?.questions?.[0]?.question || params?.question || '';
+        const shortQ = firstQ.length > 30 ? firstQ.slice(0, 27) + '...' : firstQ;
+        return isDone
+            ? (shortQ ? `Asked: <i>${escapeHtml(shortQ)}</i>` : 'Asked question')
+            : (shortQ ? `Asking: <i>${escapeHtml(shortQ)}</i>` : 'Asking question...');
+    }
+
     if (toolName.startsWith('mcp_') || toolName === 'call_mcp_tool') {
         const name = params?.ToolName || toolName.replace(/^mcp_/, '');
         return isDone

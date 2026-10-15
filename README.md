@@ -35,6 +35,7 @@
 - ⚙️ **Background Server Awareness**: Live tracking and stop buttons for active dev servers (Metro bundler, Expo, Next.js).
 - 🤖 **Model Switching**: Change reasoning models on the fly with `/model` (`gemini-3.8-flash-medium`, `gemini-3.8-flash-high`, `claude-sonnet-4-6`, `claude-opus-4-6-thinking`).
 - 🗜️ **Context Management**: Fast transcript compaction with `/compact` and quota monitoring with `/quota`.
+- ❓ **Interactive Choices**: Surfaces model `ask_question` dialogs with clickable Telegram buttons.
 - 📸 **Mobile Media**: Send screenshots or photos straight from your phone.
 - 🔒 **Private & Secure**: User whitelist restriction (`ALLOWED_USER_IDS`).
 

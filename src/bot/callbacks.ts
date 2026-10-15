@@ -1,5 +1,6 @@
 import { BotServices } from './types';
 import { buildChatsUI, buildProjectsUI } from './keyboards';
+import { registerQuestionCallbacks } from './questionHandler';
 import { ConversationSummary } from '../services/conversationService';
 import { taskManager } from '../services/taskManager';
 import { escapeHtml } from '../utils/telegramFormatter';
@@ -7,6 +8,9 @@ import { logger } from '../utils/logger';
 
 export function registerBotCallbacks(services: BotServices): void {
     const { bot, config, db, workspaceService, topicManager, convService, convCache } = services;
+
+    // Register interactive question callbacks
+    registerQuestionCallbacks(services);
 
     // Handle model picker callback
     bot.callbackQuery(/^set_model:(.+)$/, async (ctx) => {
