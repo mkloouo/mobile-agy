@@ -1,5 +1,8 @@
 import { Context, InlineKeyboard } from 'grammy';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
 import { BotServices } from './types';
 import { escapeHtml } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
@@ -37,8 +40,17 @@ function cleanupExpiredSessions(): void {
 }
 
 export function parseQuestions(params: any): AskQuestionItem[] {
-    if (Array.isArray(params?.questions)) {
-        return params.questions
+    if (!params) return [];
+
+    let qData = params.questions;
+    if (typeof qData === 'string') {
+        try {
+            qData = JSON.parse(qData);
+        } catch {}
+    }
+
+    if (Array.isArray(qData)) {
+        return qData
             .filter((q: any) => q && typeof q === 'object')
             .map((q: any) => ({
                 question: String(q.question || 'Please select an option:'),
@@ -48,8 +60,15 @@ export function parseQuestions(params: any): AskQuestionItem[] {
             .filter((q: AskQuestionItem) => q.options.length > 0);
     }
 
+    let singleOpts = params.options;
+    if (typeof singleOpts === 'string') {
+        try {
+            singleOpts = JSON.parse(singleOpts);
+        } catch {}
+    }
+
     if (params?.question) {
-        const opts = Array.isArray(params.options) ? params.options.map(String) : [];
+        const opts = Array.isArray(singleOpts) ? singleOpts.map(String) : [];
         if (opts.length > 0) {
             return [{
                 question: String(params.question),
@@ -60,6 +79,47 @@ export function parseQuestions(params: any): AskQuestionItem[] {
     }
 
     return [];
+}
+
+/**
+ * Scan the latest turn in conversation transcript to find any ask_question call
+ */
+export function findRecentAskQuestion(conversationId: string): any | null {
+    if (!conversationId) return null;
+    const transcriptPath = path.join(
+        os.homedir(),
+        '.gemini',
+        'antigravity-cli',
+        'brain',
+        conversationId,
+        '.system_generated',
+        'logs',
+        'transcript.jsonl'
+    );
+    if (!fs.existsSync(transcriptPath)) return null;
+
+    try {
+        const content = fs.readFileSync(transcriptPath, 'utf-8');
+        const lines = content.trim().split('\n');
+        for (let i = lines.length - 1; i >= 0; i--) {
+            const line = lines[i].trim();
+            if (!line) continue;
+            try {
+                const step = JSON.parse(line);
+                if (step.type === 'USER_INPUT') {
+                    break;
+                }
+                if (Array.isArray(step.tool_calls)) {
+                    const qCall = step.tool_calls.find((tc: any) => tc.name === 'ask_question');
+                    if (qCall?.args) {
+                        return qCall.args;
+                    }
+                }
+            } catch {}
+        }
+    } catch {}
+
+    return null;
 }
 
 const NUMBER_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];

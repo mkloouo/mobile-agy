@@ -195,6 +195,26 @@ export class AgyStreamService {
     }
 
     /**
+     * Mark a turn as delivered to Telegram so recovery will not re-deliver it
+     */
+    public markTurnDelivered(sessionId: string): void {
+        const inMem = this.sessions.get(sessionId);
+        if (inMem && !inMem.socket.destroyed) {
+            try {
+                inMem.socket.write(JSON.stringify({ action: 'mark_delivered' }) + '\n');
+            } catch {}
+        }
+        const paths = getSessionPaths(sessionId);
+        try {
+            if (fs.existsSync(paths.statePath)) {
+                const state = JSON.parse(fs.readFileSync(paths.statePath, 'utf-8'));
+                state.turnDelivered = true;
+                fs.writeFileSync(paths.statePath, JSON.stringify(state, null, 2), 'utf-8');
+            }
+        } catch {}
+    }
+
+    /**
      * Execute a prompt turn, connecting to or starting the persistent Unix socket daemon
      */
     public async executeTurn(sessionId: string, options: TurnOptions): Promise<TurnResult> {
@@ -532,6 +552,26 @@ export class AgyStreamService {
                     const statePath = path.join('/tmp', file);
                     try {
                         const state = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
+                        if (!state.chatId || !state.statusMessageId) continue;
+
+                        // 1. Finished while disconnected but not yet delivered to Telegram
+                        if (state.lastResult && !state.turnDelivered) {
+                            logger.info(`[AgyStream] Recovering finished undelivered turn for session ${state.sessionId}`);
+                            const resultPayload: TurnResult = {
+                                status: state.lastResult.status || 'SUCCESS',
+                                response: state.lastResult.response || '✓ Done.',
+                                error: state.lastResult.error,
+                                durationSeconds: state.lastResult.duration_seconds || 0,
+                                usage: state.lastResult.usage,
+                                conversationId: state.conversationId,
+                            };
+                            await onTurnComplete(state, resultPayload);
+                            state.turnDelivered = true;
+                            fs.writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf-8');
+                            continue;
+                        }
+
+                        // 2. In-flight turn still running
                         if (state.isBusy && state.socketPath && fs.existsSync(state.socketPath)) {
                             logger.info(`[AgyStream] Recovering in-flight session ${state.sessionId} (PID ${state.agyPid})`);
 

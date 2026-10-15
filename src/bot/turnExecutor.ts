@@ -1,7 +1,7 @@
 import { BotServices } from './types';
 import { taskManager } from '../services/taskManager';
 import { buildStopKeyboard } from './keyboards';
-import { presentQuestion } from './questionHandler';
+import { presentQuestion, findRecentAskQuestion } from './questionHandler';
 import {
     balanceHtmlTags,
     decodeHtmlEntities,
@@ -240,7 +240,13 @@ export async function executeTurnWithStatus(
             }
         }
 
+        agyService.markTurnDelivered(channelKey);
+
         // If the model called ask_question, present the question dialog with option buttons
+        if (!pendingAskQuestionParams && result.conversationId) {
+            pendingAskQuestionParams = findRecentAskQuestion(result.conversationId);
+        }
+
         if (pendingAskQuestionParams) {
             try {
                 await presentQuestion(
@@ -348,6 +354,20 @@ export function registerSessionRecovery(services: BotServices): void {
                         parse_mode: 'HTML',
                         message_thread_id: state.threadId,
                     });
+                }
+
+                if (result.conversationId) {
+                    const questionParams = findRecentAskQuestion(result.conversationId);
+                    if (questionParams) {
+                        await presentQuestion(
+                            services,
+                            state.sessionId,
+                            state.workspacePath,
+                            state.chatId,
+                            state.threadId,
+                            questionParams
+                        );
+                    }
                 }
             } catch (err: any) {
                 logger.error('[Bot] Failed to finalize recovered session message:', err);

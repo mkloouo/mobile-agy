@@ -38,6 +38,22 @@ describe('questionHandler', () => {
             expect(result[0].is_multi_select).toBe(true);
         });
 
+        it('parses JSON stringified questions array parameter', () => {
+            const params = {
+                questions: JSON.stringify([
+                    {
+                        question: 'Favorite database?',
+                        options: ['PostgreSQL', 'SQLite'],
+                        is_multi_select: false,
+                    },
+                ]),
+            };
+            const result = parseQuestions(params);
+            expect(result).toHaveLength(1);
+            expect(result[0].question).toBe('Favorite database?');
+            expect(result[0].options).toEqual(['PostgreSQL', 'SQLite']);
+        });
+
         it('returns empty array when options are empty or missing', () => {
             expect(parseQuestions({})).toEqual([]);
             expect(parseQuestions({ question: 'Empty options', options: [] })).toEqual([]);

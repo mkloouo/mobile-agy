@@ -30,6 +30,8 @@ interface DaemonState {
     statusMessageId?: number;
     chatId?: number;
     threadId?: number;
+    lastResult?: any;
+    turnDelivered?: boolean;
 }
 
 // Parse command line arguments
@@ -226,6 +228,7 @@ rlOut.on('line', (line) => {
             saveState();
         } else if (event.event === 'result') {
             state.isBusy = false;
+            state.lastResult = event.result;
             saveState();
             resetIdleTimer();
         }
@@ -292,6 +295,8 @@ const server = net.createServer((socket) => {
             switch (msg.action) {
                 case 'user_prompt': {
                     state.isBusy = true;
+                    state.turnDelivered = false;
+                    delete state.lastResult;
                     if (msg.statusMessageId) state.statusMessageId = msg.statusMessageId;
                     if (msg.chatId) state.chatId = msg.chatId;
                     if (msg.threadId) state.threadId = msg.threadId;
@@ -327,6 +332,12 @@ const server = net.createServer((socket) => {
                     state.statusMessageId = msg.statusMessageId;
                     state.chatId = msg.chatId;
                     state.threadId = msg.threadId;
+                    saveState();
+                    break;
+                }
+
+                case 'mark_delivered': {
+                    state.turnDelivered = true;
                     saveState();
                     break;
                 }
