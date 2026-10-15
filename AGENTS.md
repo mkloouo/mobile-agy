@@ -40,4 +40,3 @@ Enables headless, remote control and real-time streaming of Antigravity tasks wi
 3. **No File Bloat**: Keep source files modular and under 400 lines of code. Extract pure utilities and dedicated handlers.
 4. **Telegram Rate Limits (429)**: Status edits must be throttled (≥ 2.5s). Any final delivery or error message edit failure must gracefully fall back to `sendMessage` so responses are never lost or frozen in Telegram.
 5. **No Broken Shell Commands**: Direct shell execution (`! <cmd>`) must attach stdio and close listeners synchronously upon spawn, before any async network calls.
-6. **Changelog**: Keep `CHANGELOG.md` updated under `[Unreleased]` for any user-facing fixes or additions.
