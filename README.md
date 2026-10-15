@@ -96,8 +96,9 @@ pm2 save
 | Command | Action |
 | :--- | :--- |
 | `! <cmd>` | Execute shell command directly with live streaming and instant Stop button |
+| `/btw <question>` | Ask a side question in parallel without interrupting active tasks or polluting history |
 | `/model [name]` | Switch AI model for topic (`gemini-3.8-flash-medium`, `claude-sonnet-4-6`, etc.) |
-| `/queue` | View queued prompts, **Force Run Now** (`⚡ Force`), or clear queue |
+| `/queue` | View queued prompts, **Force Run Now** (`⚡ Force`), **Delete** (`🗑️ Delete`), or edit queued messages |
 | `/stop` | Cancel active Antigravity turn |
 | `/kill [pid]` | Terminate background command or running dev server (Expo, Next.js, Metro) |
 | `/restart` | Restart warm session daemon and reload tools / MCP environment |
@@ -157,7 +158,9 @@ Telegram ──> Grammy Bot ──> Unix Domain Socket ──> sessionDaemon ─
 ```
 
 - **Warm Process Pooling**: Fast follow-ups without re-initializing tools.
-- **Fail-Safe Detached Daemon**: Sessions survive bot restarts and reconnect automatically.
+- **Fail-Safe Detached Daemon & Reconnection**: Sessions survive bot/PM2 restarts and reconnect automatically via Unix domain sockets and SQLite session tracking.
+- **SQLite Persistence**: Workspace bindings, model preferences, daemon processes, and message queues are fully persisted across reboots.
+- **Turn Isolation & Concurrency**: Telegram-native `/btw` runs side-prompts in separate ephemeral sessions; queues support native Telegram message edits, forced immediate execution, and item deletion.
 
 ---
 

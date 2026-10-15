@@ -1,19 +1,22 @@
-import { exec } from 'child_process';
 import { InlineKeyboard } from 'grammy';
 import { BotServices } from './types';
-import { buildChatsUI, buildModelKeyboard, buildProjectsUI, buildStopKeyboard } from './keyboards';
+import { buildModelKeyboard, buildStopKeyboard } from './keyboards';
 import { taskManager } from '../services/taskManager';
-import { escapeHtml, formatAccountQuota, formatHumanDate } from '../utils/telegramFormatter';
+import { escapeHtml, formatHumanDate } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
+import { registerWorkspaceCommands } from './workspaceCommands';
+import { registerUsageCommands } from './usageCommands';
+import { registerBtwCommand } from './btwCommand';
 
 export function registerBotCommands(services: BotServices): void {
-    const { bot, config, db, workspaceService, topicManager, convService, agyService } = services;
+    const { bot, config, db, agyService, convService } = services;
 
     // Register commands with Telegram so they appear in autocomplete menu
     bot.api.setMyCommands([
         { command: 'help', description: 'Show guide and all available commands' },
         { command: 'new', description: 'Create a new topic & conversation' },
         { command: 'bind', description: 'Bind topic to any folder path (/cd, /workspace)' },
+        { command: 'btw', description: 'Ask side question without interrupting task' },
         { command: 'model', description: 'Switch active AI model' },
         { command: 'status', description: 'Show session, workspace, and process status' },
         { command: 'queue', description: 'View queued messages & force execute now' },
@@ -28,6 +31,11 @@ export function registerBotCommands(services: BotServices): void {
         { command: 'clear', description: 'Reset conversation in this topic' },
         { command: 'topic', description: 'Rename current topic' },
     ]).catch((err) => logger.warn('[Bot] Failed to set bot commands menu:', err.message));
+
+    // Register modular commands
+    registerWorkspaceCommands(services);
+    registerUsageCommands(services);
+    registerBtwCommand(services);
 
     // Command: /agy_help, /help, /start, /agy_start
     bot.command(['agy_help', 'help', 'start', 'agy_start'], async (ctx) => {
@@ -52,6 +60,7 @@ export function registerBotCommands(services: BotServices): void {
 
 <b>Control & Execution:</b>
 • <code>/model [name]</code> - View or switch active model (Flash, Sonnet, Opus)
+• <code>/btw &lt;question&gt;</code> - Ask side question without breaking context
 • <code>/status</code> - View session, active workspaces, and background servers
 • <code>/queue</code> - View queued messages, force run now, or clear queue
 • <code>/stop</code> - Cancel current running task
@@ -74,82 +83,6 @@ export function registerBotCommands(services: BotServices): void {
         `.trim();
 
         await ctx.reply(helpText, { parse_mode: 'HTML' });
-    });
-
-    // Command: /quota, /agy_usage, /agy_quota - Show overall Antigravity account quota and limits
-    bot.command(['quota', 'agy_quota', 'agy_usage'], async (ctx) => {
-        const threadId = ctx.message?.message_thread_id;
-        const statusMsg = await ctx.reply('⏳ <i>Fetching account quota & usage...</i>', {
-            parse_mode: 'HTML',
-            message_thread_id: threadId,
-        });
-
-        exec('agy --print "/usage"', {
-            timeout: 15000,
-            env: { ...process.env, PAGER: 'cat' },
-        }, async (error, stdout, stderr) => {
-            if (error && !stdout) {
-                await ctx.api.editMessageText(
-                    ctx.chat!.id,
-                    statusMsg.message_id,
-                    `❌ <b>Failed to fetch account quota:</b> ${escapeHtml(error.message)}`,
-                    { parse_mode: 'HTML' }
-                );
-                return;
-            }
-
-            const raw = (stdout || stderr || '').trim();
-            const message = formatAccountQuota(raw);
-
-            try {
-                await ctx.api.editMessageText(
-                    ctx.chat!.id,
-                    statusMsg.message_id,
-                    message,
-                    { parse_mode: 'HTML' }
-                );
-            } catch (err: any) {
-                if (!err.message?.includes('message is not modified')) {
-                    logger.error('[Bot] Error editing account usage message:', err);
-                }
-            }
-        });
-    });
-
-    // Command: /usage, /tokens, /session_usage - Show current conversation session token statistics
-    bot.command(['usage', 'tokens', 'session_usage'], async (ctx) => {
-        const channelKey = services.getChannelKey(ctx);
-        const session = db.getSession(channelKey);
-
-        if (!session || !session.conversationId) {
-            return ctx.reply('No active conversation tracked in this topic yet. Send a prompt to begin.');
-        }
-
-        const formatNum = (n: number) => n.toLocaleString();
-        const summary = convService.getSummary(session.conversationId);
-        const timeSection = summary?.lastModified
-            ? `• <b>Last Active:</b> ${formatHumanDate(summary.lastModified)}\n`
-            : (session.createdAt ? `• <b>Started:</b> ${formatHumanDate(session.createdAt)}\n` : '');
-
-        const usageText = `
-<b>📊 Session Token Usage</b>
-• <b>Conversation:</b> <code>${session.conversationId}</code>
-${timeSection}• <b>Total Turns:</b> ${formatNum(session.totalTurns || 1)}
-
-<b>Latest Turn:</b>
-• <b>Input:</b> ${formatNum(session.lastInputTokens)} tokens
-• <b>Output:</b> ${formatNum(session.lastOutputTokens)} tokens
-• <b>Thinking:</b> ${formatNum(session.lastThinkingTokens)} tokens
-• <b>Cached Context:</b> ${formatNum(session.lastCacheTokens)} tokens
-• <b>Turn Total:</b> ${formatNum(session.lastTotalTokens)} tokens
-• <b>Execution Time:</b> ${session.lastDurationSeconds.toFixed(1)}s
-
-<b>Session Cumulative:</b>
-• <b>Total Input:</b> ${formatNum(session.totalInputTokens)} tokens
-• <b>Total Output:</b> ${formatNum(session.totalOutputTokens)} tokens
-        `.trim();
-
-        await ctx.reply(usageText, { parse_mode: 'HTML' });
     });
 
     // Command: /agy_model, /model [name]
@@ -255,11 +188,14 @@ ${timeSection}• <b>Total Turns:</b> ${formatNum(session.totalTurns || 1)}
         });
 
         const keyboard = new InlineKeyboard();
-        queue.slice(0, 5).forEach((item, idx) => {
-            const preview = item.prompt.length > 25 ? `${item.prompt.slice(0, 22)}...` : item.prompt;
-            keyboard.text(`⚡ Force #${idx + 1}: ${preview}`, `q_force:${item.id}`).row();
+        queue.slice(0, 8).forEach((item, idx) => {
+            const preview = item.prompt.length > 20 ? `${item.prompt.slice(0, 18)}...` : item.prompt;
+            keyboard
+                .text(`⚡ #${idx + 1} ${preview}`, `q_force:${item.id}`)
+                .text(`🗑️ Del #${idx + 1}`, `q_del:${item.id}`)
+                .row();
         });
-        keyboard.text('🗑️ Clear Queue', 'clear_queue');
+        keyboard.text('🗑️ Clear Entire Queue', 'clear_queue');
 
         await ctx.reply(queueList, {
             parse_mode: 'HTML',
@@ -292,7 +228,7 @@ ${timeSection}• <b>Total Turns:</b> ${formatNum(session.totalTurns || 1)}
             const convWorkspaces = summary?.workspacePaths || [];
             if (convWorkspaces.length > 1) {
                 wsSection = `• <b>Bound Workspace:</b> <code>${ws}</code>\n• <b>Active Workspaces (${convWorkspaces.length}):</b>\n` +
-                    convWorkspaces.map((w) => `  ▫️ <code>${w}</code>`).join('\n');
+                    convWorkspaces.map((w: string) => `  ▫️ <code>${w}</code>`).join('\n');
             } else if (convWorkspaces.length === 1 && convWorkspaces[0] && convWorkspaces[0] !== ws) {
                 wsSection = `• <b>Bound Workspace:</b> <code>${ws}</code>\n• <b>Active Workspace:</b> <code>${convWorkspaces[0]}</code>`;
             }
@@ -419,142 +355,5 @@ ${wsSection}
         }).catch(async () => {
             await ctx.reply(replyText, { parse_mode: 'HTML', message_thread_id: threadId });
         });
-    });
-
-    // Command: /agy_new, /new [title] - Create a new topic & conversation
-    bot.command(['agy_new', 'new'], async (ctx) => {
-        const rawTitle = ctx.match?.trim();
-        const title = rawTitle || `Chat ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-        const currentChannelKey = services.getChannelKey(ctx);
-        const currentWorkspace = services.resolveWorkspace(currentChannelKey);
-
-        agyService.stopSession(currentChannelKey);
-
-        const newTopicId = await services.createConversationTopic(ctx, title);
-
-        if (newTopicId && ctx.chat) {
-            const newChannelKey = `${ctx.chat.id}:${newTopicId}`;
-
-            const boundWs = db.getWorkspaceBinding(currentChannelKey);
-            if (boundWs) {
-                db.bindWorkspace(newChannelKey, boundWs, newTopicId);
-            }
-
-            await ctx.reply(`👉 Created conversation topic: <b>${escapeHtml(title)}</b>`, {
-                parse_mode: 'HTML',
-            });
-
-            await ctx.api.sendMessage(
-                ctx.chat.id,
-                `✨ <b>New Conversation</b>\n📁 <b>Workspace:</b> <code>${currentWorkspace}</code>\n\nSend a message here to start chatting!`,
-                { parse_mode: 'HTML', message_thread_id: newTopicId }
-            );
-        } else {
-            db.deleteSession(currentChannelKey);
-            await ctx.reply('✨ Started a fresh conversation. Next message will create a new session.');
-        }
-    });
-
-    // Command: /agy_projects, /agy_project, /projects, /project
-    bot.command(['agy_projects', 'agy_project', 'projects', 'project'], async (ctx) => {
-        const workspaces = workspaceService.scanWorkspaces();
-        if (workspaces.length === 0) {
-            return ctx.reply(`No subdirectories found in <code>${workspaceService.getBaseDir()}</code>`, {
-                parse_mode: 'HTML',
-            });
-        }
-
-        const keyboard = buildProjectsUI(workspaces);
-
-        await ctx.reply('<b>Select a workspace to start a topic:</b>', {
-            reply_markup: keyboard,
-            parse_mode: 'HTML',
-        });
-    });
-
-    // Command: /agy_chats, /chats [query] - List recent Antigravity conversations with pagination
-    bot.command(['agy_chats', 'chats'], async (ctx) => {
-        const query = ctx.match?.trim() || '';
-        const searchResult = convService.search(query, 0, 5);
-        const { text, keyboard } = buildChatsUI(services.convCache, searchResult, query);
-
-        await ctx.reply(text, {
-            reply_markup: keyboard,
-            parse_mode: 'HTML',
-        });
-    });
-
-    // Command: /agy_resume, /resume <conversation_id>
-    bot.command(['agy_resume', 'resume'], async (ctx) => {
-        const convId = ctx.match?.trim();
-        if (!convId) {
-            return ctx.reply('Usage: <code>/agy_resume &lt;conversation-uuid&gt;</code>', { parse_mode: 'HTML' });
-        }
-
-        const threadId = ctx.message?.message_thread_id;
-        const isGeneral = !threadId || threadId === 1;
-
-        if (ctx.chat?.type === 'supergroup' && isGeneral) {
-            const summary = convService.getSummary(convId);
-            const title = summary?.title || `Resume ${convId.slice(0, 8)}`;
-            const wsPath = summary?.workspacePath || workspaceService.getBaseDir();
-
-            const newTopicId = await services.createConversationTopic(ctx, title);
-            if (newTopicId && ctx.chat) {
-                const newKey = `${ctx.chat.id}:${newTopicId}`;
-                db.saveSession(newKey, wsPath, convId, newTopicId);
-
-                await ctx.reply(`👉 Assigned chat to new topic: <b>${escapeHtml(title)}</b>`, { parse_mode: 'HTML' });
-                const timeInfo = summary?.lastModified ? `\n• <b>Last Active:</b> ${formatHumanDate(summary.lastModified)}` : '';
-                await ctx.api.sendMessage(
-                    ctx.chat.id,
-                    `🔄 <b>Assigned Conversation:</b> <i>${escapeHtml(title)}</i>\n<code>${convId}</code>\n<b>Workspace:</b> <code>${wsPath}</code>${timeInfo}\n\nSend a message here to resume!`,
-                    { parse_mode: 'HTML', message_thread_id: newTopicId }
-                );
-                return;
-            }
-        }
-
-        const channelKey = services.getChannelKey(ctx);
-        const ws = services.resolveWorkspace(channelKey);
-        db.saveSession(channelKey, ws, convId, threadId);
-        const summary = convService.getSummary(convId);
-        const timeInfo = summary?.lastModified ? ` (last active: ${formatHumanDate(summary.lastModified)})` : '';
-        await ctx.reply(`✅ Linked this topic to conversation <code>${convId}</code>${timeInfo}. Send a prompt to continue.`, {
-            parse_mode: 'HTML',
-        });
-    });
-
-    // Command: /agy_bind, /bind, /cd, /workspace <folder>
-    bot.command(['agy_bind', 'bind', 'cd', 'workspace'], async (ctx) => {
-        const wsName = ctx.match?.trim();
-        if (!wsName) {
-            return ctx.reply('Usage: <code>/bind &lt;workspace_folder_or_path&gt;</code>', { parse_mode: 'HTML' });
-        }
-
-        try {
-            const fullPath = workspaceService.resolveWorkspace(wsName);
-            const channelKey = services.getChannelKey(ctx);
-            const threadId = ctx.message?.message_thread_id;
-
-            db.bindWorkspace(channelKey, fullPath, threadId);
-            await ctx.reply(`✅ Bound this topic to workspace:\n<code>${escapeHtml(fullPath)}</code>`, {
-                parse_mode: 'HTML',
-            });
-        } catch (err: any) {
-            await ctx.reply(`❌ Error binding workspace: ${escapeHtml(err.message)}`, { parse_mode: 'HTML' });
-        }
-    });
-
-    // Command: /agy_topic, /topic <new title>
-    bot.command(['agy_topic', 'topic'], async (ctx) => {
-        const newTitle = ctx.match?.trim();
-        const threadId = ctx.message?.message_thread_id;
-        if (!newTitle || !threadId || threadId === 1 || !ctx.chat) {
-            return ctx.reply('Usage: <code>/agy_topic &lt;new title&gt;</code> inside a topic.', { parse_mode: 'HTML' });
-        }
-
-        await topicManager.renameTopic(ctx.chat.id, threadId, newTitle);
-        await ctx.reply(`✅ Renamed topic to: <b>${escapeHtml(newTitle)}</b>`, { parse_mode: 'HTML' });
     });
 }

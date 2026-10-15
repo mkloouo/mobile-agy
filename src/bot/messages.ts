@@ -23,7 +23,18 @@ export const ANTIGRAVITY_SLASH_COMMANDS = new Set([
     'review',
     'audit',
     'help',
+    'debt',
+    'gain',
+    'btw',
 ]);
+
+export function isAllowedSlashCommand(cmdName: string): boolean {
+    if (ANTIGRAVITY_SLASH_COMMANDS.has(cmdName)) return true;
+    if (cmdName.startsWith('ponytail-') || cmdName.startsWith('agy-') || cmdName.startsWith('antigravity-')) {
+        return true;
+    }
+    return false;
+}
 
 async function dispatchPrompt(ctx: Context, initialPrompt: string, services: BotServices): Promise<void> {
     const threadId = ctx.message?.message_thread_id;
@@ -64,11 +75,29 @@ async function dispatchPrompt(ctx: Context, initialPrompt: string, services: Bot
     if (services.agyService.isBusy(channelKey)) {
         const queue = services.db.getQueuedMessages(channelKey);
         const queuePos = queue.length + 1;
-        const queuedMsg = await ctx.reply(
-            `📥 <b>Queued (#${queuePos})</b> — will run automatically when current task finishes.`,
-            { parse_mode: 'HTML', message_thread_id: threadId }
+        const userMsgId = ctx.message?.message_id;
+
+        const queueId = services.db.enqueueMessage(
+            channelKey,
+            ctx.chat!.id,
+            threadId,
+            0,
+            userPrompt,
+            userMsgId
         );
-        services.db.enqueueMessage(channelKey, ctx.chat!.id, threadId, queuedMsg.message_id, userPrompt);
+
+        const keyboard = new InlineKeyboard()
+            .text('⚡ Force Now', `q_force:${queueId}`)
+            .text('🗑️ Delete', `q_del:${queueId}`);
+
+        const preview = userPrompt.length > 50 ? `${userPrompt.slice(0, 47)}...` : userPrompt;
+
+        const queuedMsg = await ctx.reply(
+            `📥 <b>Queued (#${queuePos})</b> — will run automatically when current task finishes.\n\n<code>${escapeHtml(preview)}</code>`,
+            { parse_mode: 'HTML', message_thread_id: threadId, reply_markup: keyboard }
+        );
+
+        services.db.updateQueuedStatusMsgId(queueId, queuedMsg.message_id);
         return;
     }
 
@@ -125,7 +154,7 @@ export async function handleIncomingMessage(ctx: Context, services: BotServices)
         const cmdMatch = rawText.match(/^\/([a-zA-Z0-9_-]+)/);
         const cmdName = cmdMatch ? cmdMatch[1].toLowerCase() : '';
 
-        if (!ANTIGRAVITY_SLASH_COMMANDS.has(cmdName)) {
+        if (!isAllowedSlashCommand(cmdName)) {
             const cmd = rawText.split(/[\s@]/)[0];
             await ctx.reply(
                 `❓ Unknown command: <code>${escapeHtml(cmd)}</code>\n\nUse /agy_help to see all available commands.`,
@@ -197,10 +226,44 @@ export async function handleIncomingMessage(ctx: Context, services: BotServices)
     await dispatchPrompt(ctx, rawText, services);
 }
 
+export async function handleEditedMessage(ctx: Context, services: BotServices): Promise<void> {
+    const channelKey = services.getChannelKey(ctx);
+    const newText = ctx.editedMessage?.text?.trim();
+    const userMsgId = ctx.editedMessage?.message_id;
+
+    if (!newText || !userMsgId) return;
+
+    const queuedItem = services.db.findQueuedMessageByUserMsgId(channelKey, userMsgId);
+    if (!queuedItem) return;
+
+    services.db.updateQueuedPrompt(queuedItem.id, newText);
+    logger.info(`[Queue] Updated prompt for queued item #${queuedItem.id} from edited message ${userMsgId}`);
+
+    const preview = newText.length > 50 ? `${newText.slice(0, 47)}...` : newText;
+    const keyboard = new InlineKeyboard()
+        .text('⚡ Force Now', `q_force:${queuedItem.id}`)
+        .text('🗑️ Delete', `q_del:${queuedItem.id}`);
+
+    try {
+        await ctx.api.editMessageText(
+            queuedItem.chatId,
+            queuedItem.statusMsgId,
+            `📥 <b>Queued (#${queuedItem.id})</b> <i>(edited)</i> — will run automatically when current task finishes.\n\n<code>${escapeHtml(preview)}</code>`,
+            { parse_mode: 'HTML', reply_markup: keyboard }
+        );
+    } catch {}
+}
+
 export function registerMessageHandlers(services: BotServices): void {
     services.bot.on(['message:text', 'message:photo', 'message:document'], (ctx) => {
         handleIncomingMessage(ctx, services).catch((err) => {
             logger.error('[Bot] Unhandled error in concurrent message handler:', err);
+        });
+    });
+
+    services.bot.on('edited_message:text', (ctx) => {
+        handleEditedMessage(ctx, services).catch((err) => {
+            logger.error('[Bot] Unhandled error in edited message handler:', err);
         });
     });
 }

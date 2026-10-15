@@ -58,24 +58,34 @@ export function cleanModelResponse(text: string): string {
 
     const lines = text.split('\n');
     const cleanedLines: string[] = [];
+    let inCode = false;
     let lastLine = '';
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         const trimmed = line.trim();
 
-        // Collapse consecutive identical lines
-        if (trimmed && trimmed === lastLine) {
+        if (trimmed.startsWith('```')) {
+            inCode = !inCode;
+            cleanedLines.push(line);
+            lastLine = trimmed;
             continue;
         }
 
-        // If line is an isolated intermediate wait/poll phrase (e.g. "Waiting for ... to finish")
-        // and is followed by substantial markdown text, filter out boilerplate wait lines
+        // Inside code blocks: never drop or deduplicate lines
+        if (inCode) {
+            cleanedLines.push(line);
+            continue;
+        }
+
+        // Collapse consecutive identical wait/poll phrases
         const isWaitLine = /^waiting for (tests?|build|gradle|task|final assertions|command|process).*$/i.test(trimmed) ||
             /^i will wait for .*$/i.test(trimmed);
 
-        if (isWaitLine && lines.length > 5) {
-            continue;
+        if (isWaitLine) {
+            if (trimmed === lastLine || lines.length > 5) {
+                continue;
+            }
         }
 
         cleanedLines.push(line);
@@ -140,7 +150,8 @@ export function formatForTelegram(markdown: string): string {
         if (trimmed.startsWith('```')) {
             inCodeBlock = !inCodeBlock;
             if (inCodeBlock) {
-                codeBlockLang = trimmed.slice(3).trim();
+                // Extract only clean language identifier without extra options/titles
+                codeBlockLang = trimmed.slice(3).trim().split(/\s+/)[0] || '';
                 result.push(codeBlockLang ? `<pre><code class="language-${escapeHtml(codeBlockLang)}">` : '<pre>');
             } else {
                 result.push(codeBlockLang ? '</code></pre>' : '</pre>');
@@ -158,7 +169,13 @@ export function formatForTelegram(markdown: string): string {
         const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
         if (headerMatch) {
             const escaped = escapeHtml(headerMatch[2]);
-            result.push(`<b>${formatMarkdownLine(escaped)}</b>`);
+            const formatted = formatMarkdownLine(escaped);
+            // Avoid double bold wrapping if title is already bold
+            if (formatted.startsWith('<b>') && formatted.endsWith('</b>')) {
+                result.push(formatted);
+            } else {
+                result.push(`<b>${formatted}</b>`);
+            }
         } else {
             const escaped = escapeHtml(line);
             result.push(formatMarkdownLine(escaped));

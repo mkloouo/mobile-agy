@@ -110,5 +110,10 @@ async function finalizeBatch(
         }
     }
 
+    // Preserve replied-to message metadata across pasted chunks
+    if (batch.replyTo && lastCtx.message && !lastCtx.message.reply_to_message) {
+        lastCtx.message.reply_to_message = batch.replyTo;
+    }
+
     await onComplete(combined, lastCtx);
 }

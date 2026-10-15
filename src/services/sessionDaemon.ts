@@ -1,10 +1,11 @@
 import net from 'net';
 import fs from 'fs';
-import path from 'path';
 import readline from 'readline';
 import { spawn, ChildProcess } from 'child_process';
+import Database from 'better-sqlite3';
 
-import { DaemonArgs, DaemonState, parseDaemonArgs, buildAgyArgs } from './sessionDaemonUtils';
+import { DaemonArgs, DaemonState, parseDaemonArgs, buildAgyArgs, generateTurnId, writeStateFile, safeUnlink } from './sessionDaemonUtils';
+import { syncDaemonStateToDb, deleteDaemonSession } from '../database/daemonSessionDb';
 
 let config: DaemonArgs;
 try {
@@ -12,6 +13,16 @@ try {
 } catch (err: any) {
     console.error(err.message || err);
     process.exit(1);
+}
+
+let sqliteDb: Database.Database | null = null;
+if (config.dbPath) {
+    try {
+        sqliteDb = new Database(config.dbPath);
+        sqliteDb.pragma('journal_mode = WAL');
+    } catch (dbErr) {
+        console.error('[SessionDaemon] Failed to open SQLite DB:', dbErr);
+    }
 }
 
 const state: DaemonState = {
@@ -29,12 +40,15 @@ const state: DaemonState = {
 };
 
 function saveState(): void {
-    try {
-        state.lastActiveAt = Date.now();
-        fs.writeFileSync(config.statePath, JSON.stringify(state, null, 2), 'utf-8');
-    } catch (err) {
-        console.error('[SessionDaemon] Failed to write state file:', err);
+    state.lastActiveAt = Date.now();
+    if (sqliteDb) {
+        try {
+            syncDaemonStateToDb(sqliteDb, state);
+        } catch (err) {
+            console.error('[SessionDaemon] SQLite save failed:', err);
+        }
     }
+    writeStateFile(config.statePath, state);
 }
 
 // Ring buffer of recent events for replay on reconnect
@@ -62,12 +76,7 @@ function broadcast(data: any): void {
     }
 }
 
-// Clean up stale socket file before listening
-if (fs.existsSync(config.socketPath)) {
-    try {
-        fs.unlinkSync(config.socketPath);
-    } catch {}
-}
+safeUnlink(config.socketPath);
 
 let idleTimer: NodeJS.Timeout | null = null;
 let agyProc: ChildProcess | null = null;
@@ -95,13 +104,16 @@ function shutdown(): void {
     log(`Shutdown initiated for daemon PID ${process.pid}`);
     if (idleTimer) clearTimeout(idleTimer);
 
-    try {
-        if (fs.existsSync(config.socketPath)) fs.unlinkSync(config.socketPath);
-    } catch {}
+    if (sqliteDb) {
+        try {
+            deleteDaemonSession(sqliteDb, config.sessionId);
+            sqliteDb.close();
+            sqliteDb = null;
+        } catch {}
+    }
 
-    try {
-        if (fs.existsSync(config.statePath)) fs.unlinkSync(config.statePath);
-    } catch {}
+    safeUnlink(config.socketPath);
+    safeUnlink(config.statePath);
 
     if (agyProc && !agyProc.killed) {
         agyProc.kill('SIGTERM');
@@ -124,12 +136,8 @@ process.on('SIGINT', () => {
 });
 
 process.on('SIGTERM', () => {
-    if (!state.isBusy) {
-        log('Received SIGTERM while idle: shutting down.');
-        shutdown();
-    } else {
-        log('Ignoring SIGTERM while busy to allow bot re-attachment.');
-    }
+    log('Received SIGTERM: shutting down.');
+    shutdown();
 });
 
 // Spawn agy process
@@ -146,6 +154,25 @@ agyProc = spawn('agy', agyArgs, {
         PAGER: 'cat',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
+});
+
+agyProc.on('error', (err) => {
+    log('Failed to spawn agy process:', err.message);
+    const errMsg = `❌ Failed to spawn agy process: ${err.message}`;
+    state.isBusy = false;
+    broadcast({
+        event: 'result',
+        result: {
+            status: 'ERROR',
+            response: errMsg,
+            error: err.message,
+            duration_seconds: 0,
+            conversation_id: state.conversationId,
+        },
+    });
+    setTimeout(() => {
+        shutdown();
+    }, 150);
 });
 
 state.agyPid = agyProc.pid || 0;
@@ -184,10 +211,27 @@ rlOut.on('line', (line) => {
             state.conversationId = event.conversation_id;
             log(`agy initialized: convId=${event.conversation_id}`);
             saveState();
+        } else if (event.event === 'step_update') {
+            event.turnId = state.currentTurnId;
+            const step = event.step_update;
+            if (step?.step_type === 'agent_response' && step.text_delta) {
+                state.accumulatedResponse = (state.accumulatedResponse || '') + step.text_delta;
+            }
         } else if (event.event === 'result') {
+            event.turnId = state.currentTurnId;
             state.isBusy = false;
-            state.lastResult = event.result;
-            log(`agy turn completed: status=${event.result?.status}, duration=${event.result?.duration_seconds}s`);
+            const turnDurationSec = state.turnStartTime
+                ? Math.max(1, Math.round((Date.now() - state.turnStartTime) / 1000))
+                : (event.result?.duration_seconds ? Math.max(1, Math.round(event.result.duration_seconds)) : 0);
+            if (event.result) {
+                event.result.duration_seconds = turnDurationSec;
+            }
+            state.lastResult = {
+                ...event.result,
+                duration_seconds: turnDurationSec,
+                response: event.result?.response || state.accumulatedResponse || '',
+            };
+            log(`agy turn completed turnId=${state.currentTurnId}: status=${event.result?.status}, duration=${turnDurationSec}s`);
             saveState();
             resetIdleTimer();
         }
@@ -215,6 +259,7 @@ agyProc.on('close', (code, signal) => {
     }
     broadcast({
         event: 'result',
+        turnId: state.currentTurnId,
         result: {
             status: signal ? 'STOPPED' : (isError ? 'ERROR' : 'SUCCESS'),
             response: signal ? '*Task was stopped.*' : (isError ? errMsg : (state.isBusy ? '*Done.*' : '')),
@@ -233,11 +278,13 @@ const server = net.createServer((socket) => {
     connectedClients.add(socket);
     log(`Bot connected to Unix socket. Total clients: ${connectedClients.size}`);
 
-    // Send hello handshake with current state and recent events history
+    // Send hello handshake with current state, recent events history, and active accumulated response
     socket.write(JSON.stringify({
         event: 'daemon_hello',
         state,
+        currentTurnId: state.currentTurnId,
         history: recentEvents,
+        accumulatedResponse: state.isBusy ? (state.accumulatedResponse || '') : '',
     }) + '\n');
 
     const rlSocket = readline.createInterface({
@@ -256,13 +303,16 @@ const server = net.createServer((socket) => {
                 case 'user_prompt': {
                     state.isBusy = true;
                     state.turnDelivered = false;
+                    state.accumulatedResponse = '';
+                    state.currentTurnId = msg.turnId || generateTurnId();
+                    state.turnStartTime = Date.now();
                     delete state.lastResult;
                     if (msg.statusMessageId) state.statusMessageId = msg.statusMessageId;
                     if (msg.chatId) state.chatId = msg.chatId;
                     if (msg.threadId) state.threadId = msg.threadId;
                     if (idleTimer) clearTimeout(idleTimer);
                     recentEvents.length = 0; // reset history for new turn
-                    log(`Received user_prompt (len: ${msg.prompt?.length}, statusMsgId: ${msg.statusMessageId}, threadId: ${msg.threadId})`);
+                    log(`Received user_prompt turnId=${state.currentTurnId} (len: ${msg.prompt?.length}, statusMsgId: ${msg.statusMessageId}, threadId: ${msg.threadId})`);
                     saveState();
 
                     const promptPayload = JSON.stringify({

@@ -1,3 +1,5 @@
+import fs from 'fs';
+
 export interface DaemonArgs {
     socketPath: string;
     statePath: string;
@@ -7,6 +9,7 @@ export interface DaemonArgs {
     autoApprove: boolean;
     model?: string;
     idleTimeoutSeconds: number;
+    dbPath?: string;
 }
 
 export interface DaemonState {
@@ -21,11 +24,18 @@ export interface DaemonState {
     isBusy: boolean;
     createdAt: number;
     lastActiveAt: number;
+    currentTurnId?: string;
+    turnStartTime?: number;
     statusMessageId?: number;
     chatId?: number;
     threadId?: number;
     lastResult?: any;
     turnDelivered?: boolean;
+    accumulatedResponse?: string;
+}
+
+export function generateTurnId(): string {
+    return `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function parseDaemonArgs(args: string[]): DaemonArgs {
@@ -42,9 +52,10 @@ export function parseDaemonArgs(args: string[]): DaemonArgs {
     const autoApprove = getArg('--autoApprove') !== 'false';
     const model = getArg('--model') || undefined;
     const idleTimeoutSeconds = parseInt(getArg('--idle') || '300', 10) || 300;
+    const dbPath = getArg('--db') || undefined;
 
     if (!socketPath || !sessionId || !workspacePath) {
-        throw new Error('Usage: sessionDaemon --socket <path> --state <path> --session <id> --workspace <path>');
+        throw new Error('Usage: sessionDaemon --socket <path> --session <id> --workspace <path>');
     }
 
     return {
@@ -56,6 +67,7 @@ export function parseDaemonArgs(args: string[]): DaemonArgs {
         autoApprove,
         model,
         idleTimeoutSeconds,
+        dbPath,
     };
 }
 
@@ -85,4 +97,19 @@ export function buildAgyArgs(config: {
     }
 
     return agyArgs;
+}
+
+export function writeStateFile(statePath: string | undefined, state: DaemonState): void {
+    if (!statePath) return;
+    try {
+        const tmpPath = `${statePath}.${process.pid}.tmp`;
+        fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf-8');
+        fs.renameSync(tmpPath, statePath);
+    } catch {}
+}
+
+export function safeUnlink(filePath?: string): void {
+    if (filePath && fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch {}
+    }
 }

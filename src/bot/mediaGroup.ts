@@ -159,41 +159,52 @@ async function processCompletedAlbum(mediaGroupId: string, services: BotServices
     const channelKey = group.channelKey;
     const workspacePath = services.resolveWorkspace(channelKey);
 
-    // If session is busy, enqueue with the single status message
+    let finalStatusMsgId = statusMsgId;
+    if (!finalStatusMsgId) {
+        try {
+            const fallbackMsg = await services.bot.api.sendMessage(
+                group.chatId,
+                '🧠 <i>Antigravity is thinking...</i>',
+                { parse_mode: 'HTML', message_thread_id: group.threadId }
+            );
+            finalStatusMsgId = fallbackMsg.message_id;
+        } catch (err: any) {
+            logger.error('[MediaGroup] Failed to create fallback status message:', err);
+            return;
+        }
+    }
+
+    // If session is busy, enqueue with the status message
     if (services.agyService.isBusy(channelKey)) {
         const queue = services.db.getQueuedMessages(channelKey);
         const queuePos = queue.length + 1;
 
-        if (statusMsgId) {
-            await services.bot.api.editMessageText(
-                group.chatId,
-                statusMsgId,
-                `📥 <b>Queued (#${queuePos})</b> — will run automatically when current task finishes (${total} photos attached).`,
-                { parse_mode: 'HTML' }
-            ).catch(() => {});
-            services.db.enqueueMessage(channelKey, group.chatId, group.threadId, statusMsgId, userPrompt);
-        }
+        await services.bot.api.editMessageText(
+            group.chatId,
+            finalStatusMsgId,
+            `📥 <b>Queued (#${queuePos})</b> — will run automatically when current task finishes (${total} photos attached).`,
+            { parse_mode: 'HTML' }
+        ).catch(() => {});
+        services.db.enqueueMessage(channelKey, group.chatId, group.threadId, finalStatusMsgId, userPrompt);
         return;
     }
 
     // Update status to thinking and launch turn
-    if (statusMsgId) {
-        await services.bot.api.editMessageText(
-            group.chatId,
-            statusMsgId,
-            `🧠 <i>Antigravity is thinking (${total} images loaded)...</i>`,
-            { parse_mode: 'HTML' }
-        ).catch(() => {});
+    await services.bot.api.editMessageText(
+        group.chatId,
+        finalStatusMsgId,
+        `🧠 <i>Antigravity is thinking (${total} images loaded)...</i>`,
+        { parse_mode: 'HTML' }
+    ).catch(() => {});
 
-        services.executeTurnWithStatus(
-            channelKey,
-            workspacePath,
-            userPrompt,
-            group.chatId,
-            group.threadId,
-            statusMsgId
-        ).catch((err) => {
-            logger.error('[MediaGroup] Turn execution error:', err);
-        });
-    }
+    services.executeTurnWithStatus(
+        channelKey,
+        workspacePath,
+        userPrompt,
+        group.chatId,
+        group.threadId,
+        finalStatusMsgId
+    ).catch((err) => {
+        logger.error('[MediaGroup] Turn execution error:', err);
+    });
 }

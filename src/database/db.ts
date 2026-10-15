@@ -1,5 +1,46 @@
 import Database from 'better-sqlite3';
 import { logger } from '../utils/logger';
+import { loadConfig } from '../utils/config';
+import {
+    DaemonSessionRecord,
+    initDaemonSessionTable,
+    upsertDaemonSession,
+    getDaemonSession,
+    getRecoverableDaemonSessions,
+    markDaemonTurnDelivered,
+    deleteDaemonSession,
+} from './daemonSessionDb';
+import {
+    QueuedMessageRecord,
+    initQueuedMessageTable,
+    enqueueMessage,
+    getQueuedMessages,
+    popNextQueuedMessage,
+    popQueuedMessageById,
+    getQueuedMessageById,
+    deleteQueuedMessage,
+    updateQueuedPrompt,
+    updateQueuedStatusMsgId,
+    findQueuedMessageByUserMsgId,
+    clearQueue,
+    getDistinctQueuedChannels,
+} from './queuedMessageDb';
+
+export { DaemonSessionRecord, QueuedMessageRecord };
+
+let dbInstance: DatabaseManager | null = null;
+
+export function getDatabase(dbPath?: string): DatabaseManager {
+    if (!dbInstance) {
+        const resolvedPath = dbPath || loadConfig().dbPath;
+        dbInstance = new DatabaseManager(resolvedPath);
+    }
+    return dbInstance;
+}
+
+export function setDatabase(db: DatabaseManager | null): void {
+    dbInstance = db;
+}
 
 export interface UsageStats {
     inputTokens: number;
@@ -37,6 +78,7 @@ export class DatabaseManager {
         this.db = new Database(dbPath);
         this.db.pragma('journal_mode = WAL');
         this.initTables();
+        dbInstance = this;
     }
 
     private initTables(): void {
@@ -68,16 +110,10 @@ export class DatabaseManager {
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
 
-            CREATE TABLE IF NOT EXISTS queued_messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel_id TEXT NOT NULL,
-                chat_id INTEGER NOT NULL,
-                thread_id INTEGER,
-                status_msg_id INTEGER NOT NULL,
-                prompt TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
         `);
+
+        initQueuedMessageTable(this.db);
+        initDaemonSessionTable(this.db);
 
         // Migrations for existing databases
         const columns = [
@@ -149,12 +185,19 @@ export class DatabaseManager {
             ON CONFLICT(channel_id) DO UPDATE SET
                 workspace_path = excluded.workspace_path,
                 conversation_id = excluded.conversation_id,
-                topic_id = excluded.topic_id
+                topic_id = COALESCE(excluded.topic_id, chat_sessions.topic_id)
         `);
         stmt.run(channelId, workspacePath, conversationId, topicId ?? null);
     }
 
     public recordTurnUsage(channelId: string, stats: UsageStats): void {
+        // Ensure chat_sessions row exists so token usage is never dropped
+        this.db.prepare(`
+            INSERT INTO chat_sessions (channel_id, workspace_path, conversation_id)
+            VALUES (?, '', '')
+            ON CONFLICT(channel_id) DO NOTHING
+        `).run(channelId);
+
         const stmt = this.db.prepare(`
             UPDATE chat_sessions SET
                 last_input_tokens = ?,
@@ -177,7 +220,7 @@ export class DatabaseManager {
             stats.durationSeconds,
             stats.inputTokens,
             stats.outputTokens,
-            channelKeyNormalize(channelId)
+            channelId
         );
     }
 
@@ -204,88 +247,81 @@ export class DatabaseManager {
             VALUES (?, ?, ?)
             ON CONFLICT(channel_id) DO UPDATE SET
                 workspace_path = excluded.workspace_path,
-                topic_id = excluded.topic_id
+                topic_id = COALESCE(excluded.topic_id, workspace_bindings.topic_id)
         `);
         stmt.run(channelId, workspacePath, topicId ?? null);
     }
 
     // Message Queue (persists across PM2 restarts)
-    public enqueueMessage(channelId: string, chatId: number, threadId: number | undefined, statusMsgId: number, prompt: string): number {
-        const stmt = this.db.prepare(`
-            INSERT INTO queued_messages (channel_id, chat_id, thread_id, status_msg_id, prompt)
-            VALUES (?, ?, ?, ?, ?)
-        `);
-        const info = stmt.run(channelId, chatId, threadId ?? null, statusMsgId, prompt);
-        return Number(info.lastInsertRowid);
+    public enqueueMessage(channelId: string, chatId: number, threadId: number | undefined, statusMsgId: number, prompt: string, userMsgId?: number): number {
+        return enqueueMessage(this.db, channelId, chatId, threadId, statusMsgId, prompt, userMsgId);
     }
 
     public getQueuedMessages(channelId: string): QueuedMessageRecord[] {
-        const stmt = this.db.prepare(`
-            SELECT id, channel_id as channelId, chat_id as chatId, thread_id as threadId,
-                   status_msg_id as statusMsgId, prompt, created_at as createdAt
-            FROM queued_messages
-            WHERE channel_id = ?
-            ORDER BY id ASC
-        `);
-        return stmt.all(channelId) as QueuedMessageRecord[];
+        return getQueuedMessages(this.db, channelId);
     }
 
     public popNextQueuedMessage(channelId: string): QueuedMessageRecord | undefined {
-        const selectStmt = this.db.prepare(`
-            SELECT id, channel_id as channelId, chat_id as chatId, thread_id as threadId,
-                   status_msg_id as statusMsgId, prompt, created_at as createdAt
-            FROM queued_messages
-            WHERE channel_id = ?
-            ORDER BY id ASC
-            LIMIT 1
-        `);
-        const item = selectStmt.get(channelId) as QueuedMessageRecord | undefined;
-        if (item) {
-            this.db.prepare('DELETE FROM queued_messages WHERE id = ?').run(item.id);
-        }
-        return item;
-    }
-
-    public clearQueue(channelId: string): number {
-        const stmt = this.db.prepare('DELETE FROM queued_messages WHERE channel_id = ?');
-        const info = stmt.run(channelId);
-        return info.changes;
+        return popNextQueuedMessage(this.db, channelId);
     }
 
     public popQueuedMessageById(id: number): QueuedMessageRecord | undefined {
-        const selectStmt = this.db.prepare(`
-            SELECT id, channel_id as channelId, chat_id as chatId, thread_id as threadId,
-                   status_msg_id as statusMsgId, prompt, created_at as createdAt
-            FROM queued_messages
-            WHERE id = ?
-        `);
-        const item = selectStmt.get(id) as QueuedMessageRecord | undefined;
-        if (item) {
-            this.db.prepare('DELETE FROM queued_messages WHERE id = ?').run(id);
-        }
-        return item;
+        return popQueuedMessageById(this.db, id);
+    }
+
+    public getQueuedMessageById(id: number): QueuedMessageRecord | undefined {
+        return getQueuedMessageById(this.db, id);
+    }
+
+    public deleteQueuedMessage(id: number): boolean {
+        return deleteQueuedMessage(this.db, id);
+    }
+
+    public updateQueuedPrompt(id: number, prompt: string): boolean {
+        return updateQueuedPrompt(this.db, id, prompt);
+    }
+
+    public updateQueuedStatusMsgId(id: number, statusMsgId: number): boolean {
+        return updateQueuedStatusMsgId(this.db, id, statusMsgId);
+    }
+
+    public findQueuedMessageByUserMsgId(channelId: string, userMsgId: number): QueuedMessageRecord | undefined {
+        return findQueuedMessageByUserMsgId(this.db, channelId, userMsgId);
+    }
+
+    public clearQueue(channelId: string): number {
+        return clearQueue(this.db, channelId);
     }
 
     public getDistinctQueuedChannels(): string[] {
-        const rows = this.db.prepare('SELECT DISTINCT channel_id FROM queued_messages ORDER BY id ASC').all() as any[];
-        return rows.map((r) => r.channel_id);
+        return getDistinctQueuedChannels(this.db);
+    }
+
+    // Daemon Sessions (persisted runner state)
+    public upsertDaemonSession(session: DaemonSessionRecord): void {
+        upsertDaemonSession(this.db, session);
+    }
+
+    public getDaemonSession(channelId: string): DaemonSessionRecord | undefined {
+        return getDaemonSession(this.db, channelId);
+    }
+
+    public getRecoverableDaemonSessions(): DaemonSessionRecord[] {
+        return getRecoverableDaemonSessions(this.db);
+    }
+
+    public markDaemonTurnDelivered(channelId: string, turnId?: string): void {
+        markDaemonTurnDelivered(this.db, channelId, turnId);
+    }
+
+    public deleteDaemonSession(channelId: string): void {
+        deleteDaemonSession(this.db, channelId);
     }
 
     public close(): void {
+        if (dbInstance === this) {
+            dbInstance = null;
+        }
         this.db.close();
     }
-}
-
-export interface QueuedMessageRecord {
-    id: number;
-    channelId: string;
-    chatId: number;
-    threadId?: number;
-    statusMsgId: number;
-    prompt: string;
-    createdAt: string;
-}
-
-function channelKeyNormalize(key: string): string {
-    return key;
 }

@@ -124,14 +124,28 @@ export async function handleShellCommand(ctx: Context, rawText: string, services
         if (pid) taskManager.unregisterProcess(pid);
 
         const statusMsg = await statusMsgPromise;
-        if (!statusMsg) return;
-
         const statusTag = exitCode === 0
             ? ''
             : ` [exit ${exitCode !== null ? exitCode : exitSignal || 1}]`;
 
         const fullMsg = formatShellMessage(shellCmd, outputBuffer, statusTag);
         const chunks = splitTelegramHtml(fullMsg);
+
+        if (!statusMsg) {
+            for (const chunk of chunks) {
+                try {
+                    await ctx.reply(chunk, {
+                        parse_mode: 'HTML',
+                        message_thread_id: threadId,
+                    });
+                } catch {
+                    await ctx.reply(chunk.replace(/<[^>]+>/g, ''), {
+                        message_thread_id: threadId,
+                    }).catch(() => {});
+                }
+            }
+            return;
+        }
 
         try {
             await ctx.api.editMessageText(
@@ -175,13 +189,17 @@ export async function handleShellCommand(ctx: Context, rawText: string, services
         if (pid) taskManager.unregisterProcess(pid);
 
         const statusMsg = await statusMsgPromise;
-        if (!statusMsg) return;
+        const errMsg = `⚡ <b>$ ${escapeHtml(shellCmd)}</b> [Failed to spawn]\n<pre><code>${escapeHtml(err.message)}</code></pre>`;
+        if (!statusMsg) {
+            await ctx.reply(errMsg, { parse_mode: 'HTML', message_thread_id: threadId }).catch(() => {});
+            return;
+        }
 
         try {
             await ctx.api.editMessageText(
                 ctx.chat!.id,
                 statusMsg.message_id,
-                `⚡ <b>$ ${escapeHtml(shellCmd)}</b> [Failed to spawn]\n<pre><code>${escapeHtml(err.message)}</code></pre>`,
+                errMsg,
                 { parse_mode: 'HTML' }
             );
         } catch {}

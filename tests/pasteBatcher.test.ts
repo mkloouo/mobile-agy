@@ -62,4 +62,34 @@ describe('pasteBatcher', () => {
         expect(onComplete).toHaveBeenCalledTimes(1);
         expect(onComplete).toHaveBeenCalledWith('Line 1 of huge log\nLine 2 of huge log\nLine 3 of huge log', ctx);
     });
+
+    it('preserves reply_to_message context from initial chunk when later chunks omit it', async () => {
+        const onComplete = vi.fn();
+        const repliedMsg = { text: 'Quoted context', from: { first_name: 'Alex' } };
+
+        const ctx1: any = {
+            chat: { id: 456 },
+            message: { message_thread_id: 20, reply_to_message: repliedMsg },
+        };
+        const ctx2: any = {
+            chat: { id: 456 },
+            message: { message_thread_id: 20 },
+            reply: vi.fn().mockResolvedValue({ message_id: 888 }),
+        };
+        const services: any = {
+            getChannelKey: () => '456:20',
+            bot: { api: { editMessageText: vi.fn().mockResolvedValue({}) } },
+        };
+
+        handlePastedText(ctx1, 'Chunk 1 with reply', services, onComplete);
+        vi.advanceTimersByTime(100);
+        handlePastedText(ctx2, 'Chunk 2 without reply', services, onComplete);
+
+        vi.advanceTimersByTime(650);
+
+        expect(onComplete).toHaveBeenCalledTimes(1);
+        const [combinedText, passedCtx] = onComplete.mock.calls[0];
+        expect(combinedText).toBe('Chunk 1 with reply\nChunk 2 without reply');
+        expect(passedCtx.message.reply_to_message).toEqual(repliedMsg);
+    });
 });

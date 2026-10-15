@@ -11,11 +11,12 @@ import {
     cleanModelResponse,
     sanitizeTelegramHtml,
 } from '../src/utils/telegramFormatter';
+import { formatDuration } from '../src/utils/dateFormatter';
 
 describe('telegramFormatter', () => {
     describe('escapeHtml and decodeHtmlEntities', () => {
-        it('escapes &, <, and >', () => {
-            expect(escapeHtml('Hello & <world>')).toBe('Hello &amp; &lt;world&gt;');
+        it('escapes &, <, >, ", and \'', () => {
+            expect(escapeHtml('Hello & <world> "test" \'it\'')).toBe('Hello &amp; &lt;world&gt; &quot;test&quot; &#39;it&#39;');
         });
 
         it('decodes &amp;, &lt;, &gt;, &quot;, &#39;', () => {
@@ -61,6 +62,26 @@ describe('telegramFormatter', () => {
                 // Each chunk should be balanced
                 const { openTags } = balanceHtmlTags(chunk);
                 expect(openTags.length).toBe(0);
+            }
+        });
+
+        it('preserves indentation in subsequent chunks without aggressive trimming', () => {
+            const longIndented = '<pre><code>\n    function test() {\n        return 42;\n    }\n</code></pre>';
+            const chunks = splitTelegramHtml(longIndented, 40);
+            expect(chunks.length).toBeGreaterThan(1);
+            // Verify that indentation in second chunk wasn't stripped away
+            const fullRecombined = chunks.join('');
+            expect(fullRecombined).toContain('        return 42;');
+        });
+
+        it('does not split across an HTML entity boundary', () => {
+            // Pad so that chunk boundary lands near &quot;
+            const prefix = 'a'.repeat(95);
+            const text = `${prefix}&quot;rest of string`;
+            const chunks = splitTelegramHtml(text, 100);
+            for (const chunk of chunks) {
+                expect(chunk).not.toMatch(/&[a-z0-9#]*$/i); // chunk should not end with broken entity
+                expect(chunk).not.toMatch(/^[a-z0-9#]*;/i); // chunk should not start with broken entity
             }
         });
     });
@@ -179,6 +200,59 @@ describe('telegramFormatter', () => {
             expect(formatted).toContain('<code>__init__</code>');
             expect(formatted).toContain('<code>*ptr</code>');
             expect(formatted).not.toContain('<code><b>init</b></code>');
+        });
+
+        it('prevents double bold wrapping when markdown header has bold syntax', () => {
+            const md = '# **Important Notice**';
+            const formatted = formatForTelegram(md);
+            expect(formatted).toBe('<b>Important Notice</b>');
+            expect(formatted).not.toContain('<b><b>');
+        });
+
+        it('strips code tags inside anchor links', () => {
+            const html = '<a href="https://example.com"><code>click here</code></a>';
+            const sanitized = sanitizeTelegramHtml(html);
+            expect(sanitized).toBe('<a href="https://example.com">click here</a>');
+        });
+
+        it('unrolls improperly nested tags for strict LIFO compliance', () => {
+            const html = '<b><i>text</b>';
+            const { closedHtml } = balanceHtmlTags(html);
+            expect(closedHtml).toBe('<b><i>text</i></b>');
+        });
+
+        it('preserves self-closing void tags without appending closing tag', () => {
+            const html = 'Line 1<br/>Line 2';
+            const { closedHtml } = balanceHtmlTags(html);
+            expect(closedHtml).toBe('Line 1<br/>Line 2');
+        });
+
+        it('preserves duplicate lines inside code blocks in cleanModelResponse', () => {
+            const md = [
+                '```ts',
+                'const x = 1;',
+                'const x = 1;',
+                '```',
+            ].join('\n');
+            const cleaned = cleanModelResponse(md);
+            expect(cleaned).toBe(md);
+        });
+    });
+
+    describe('formatDuration', () => {
+        it('formats seconds without decimals', () => {
+            expect(formatDuration(45)).toBe('45s');
+            expect(formatDuration(45.151737)).toBe('45s');
+        });
+
+        it('formats minutes and seconds cleanly without floating point leftovers', () => {
+            expect(formatDuration(75)).toBe('1m 15s');
+            expect(formatDuration(4315.151737)).toBe('1h 11m 55s');
+        });
+
+        it('formats hours, minutes and seconds cleanly', () => {
+            expect(formatDuration(3665)).toBe('1h 01m 05s');
+            expect(formatDuration(5716.14406)).toBe('1h 35m 16s');
         });
     });
 });

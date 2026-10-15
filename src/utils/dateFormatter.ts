@@ -36,6 +36,26 @@ export function formatElapsedTime(elapsedSeconds: number): string {
 }
 
 /**
+ * Format duration in seconds to clean human string (e.g. "45s", "2m 15s", "1h 05m 10s")
+ * Guaranteed integer seconds without float decimals.
+ */
+export function formatDuration(seconds: number): string {
+    const totalSec = Math.max(0, Math.round(seconds));
+    if (totalSec >= 3600) {
+        const hours = Math.floor(totalSec / 3600);
+        const minutes = Math.floor((totalSec % 3600) / 60);
+        const secs = totalSec % 60;
+        return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`;
+    }
+    if (totalSec >= 60) {
+        const minutes = Math.floor(totalSec / 60);
+        const secs = totalSec % 60;
+        return `${minutes}m ${secs}s`;
+    }
+    return `${totalSec}s`;
+}
+
+/**
  * Format a date or ISO/SQLite timestamp into human-readable local machine time.
  * Example: Wed, 13th of Aug, 2026 22:40
  */

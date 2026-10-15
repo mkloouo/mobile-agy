@@ -1,17 +1,7 @@
 import { BotServices } from './types';
-import { taskManager } from '../services/taskManager';
-import { buildStopKeyboard } from './keyboards';
 import { presentQuestion, findRecentAskQuestion } from './questionHandler';
-import {
-    cleanModelResponse,
-    decodeHtmlEntities,
-    describeToolAction,
-    escapeHtml,
-    formatElapsedTime,
-    formatForTelegram,
-    sanitizeTelegramHtml,
-    splitTelegramHtml,
-} from '../utils/telegramFormatter';
+import { describeToolAction, escapeHtml } from '../utils/telegramFormatter';
+import { buildProgressStatus, buildCompletedStatus, deliverTurnResponse } from './turnDelivery';
 import { logger } from '../utils/logger';
 
 export { registerSessionRecovery } from './sessionRecovery';
@@ -45,34 +35,20 @@ export async function executeTurnWithStatus(
         }
         lastEditTime = now;
 
-        let displayText = '🧠 <b>Antigravity is working...</b>';
-
-        if (activeToolInfo) {
-            const activeDesc = describeToolAction(activeToolInfo.name, activeToolInfo.params, workspacePath, 'active');
-            displayText += `\n\n⚙️ ${activeDesc}...`;
-        }
-
-        if (recentCompletedActions.length > 0) {
-            const actionLines = recentCompletedActions.slice(-4).map((item) => `• ✓ ${item}`);
-            displayText += `\n\n<b>Recent actions:</b>\n${actionLines.join('\n')}`;
-        }
-
-        const runningTasks = await taskManager.getRunningTasks(channelKey, workspacePath);
-        const stopKeyboard = buildStopKeyboard(runningTasks);
-        if (runningTasks.length > 0) {
-            const taskBadges = runningTasks.map((t) => `• ⚙️ <b>${escapeHtml(t.name)}</b> (PID ${t.pid}${t.port ? ` · port ${t.port}` : ''})`).join('\n');
-            displayText += `\n\n<b>Active Background:</b>\n${taskBadges}`;
-        }
-
-        const elapsedSec = Math.max(0, Math.floor((now - startTime) / 1000));
-        displayText += `\n\n⏱️ <i>Actively working: ${formatElapsedTime(elapsedSec)}</i>`;
+        const status = await buildProgressStatus({
+            channelKey,
+            workspacePath,
+            startTime,
+            activeToolInfo,
+            recentCompletedActions,
+        });
 
         try {
             await bot.api.editMessageText(
                 chatId,
                 statusMsgId,
-                sanitizeTelegramHtml(displayText),
-                { parse_mode: 'HTML', reply_markup: stopKeyboard }
+                status.text,
+                { parse_mode: 'HTML', reply_markup: status.keyboard }
             );
         } catch (err: any) {
             if (err.parameters?.retry_after) {
@@ -131,13 +107,15 @@ export async function executeTurnWithStatus(
             db.saveSession(channelKey, workspacePath, result.conversationId, threadId);
         }
 
+        const durationSec = Math.max(1, Math.round((Date.now() - startTime) / 1000));
+
         db.recordTurnUsage(channelKey, {
             inputTokens: result.usage?.input_tokens || 0,
             outputTokens: result.usage?.output_tokens || 0,
             thinkingTokens: result.usage?.thinking_tokens || 0,
             cacheTokens: result.usage?.cache_read_tokens || 0,
             totalTokens: result.usage?.total_tokens || 0,
-            durationSeconds: result.durationSeconds || 0,
+            durationSeconds: durationSec,
         });
 
         const rawResponse = (result.response || '').trim();
@@ -156,37 +134,22 @@ export async function executeTurnWithStatus(
             agyService.restartSession(channelKey).catch(() => {});
         }
 
-        const durationSec = result.durationSeconds || Math.max(1, Math.round((Date.now() - startTime) / 1000));
-        const durationText = durationSec >= 60
-            ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`
-            : `${durationSec}s`;
-
-        // 1. Leave the status message on actions done (short list)
-        let statusDoneText: string;
-        if (isActualError) {
-            statusDoneText = `❌ <b>Execution failed</b> (${durationText})`;
-        } else if (userPrompt.trim().startsWith('/compact')) {
-            statusDoneText = '🗜️ <b>Conversation compacted.</b> Context window summarized.';
-        } else if (recentCompletedActions.length > 0) {
-            statusDoneText = `✓ <b>Actions completed</b> (${durationText}):\n` +
-                recentCompletedActions.slice(-5).map((a) => `• ✓ ${a}`).join('\n');
-        } else {
-            statusDoneText = `✓ <b>Completed</b> (${durationText})`;
-        }
-
-        const runningTasks = await taskManager.getRunningTasks(channelKey, workspacePath);
-        const stopKeyboard = buildStopKeyboard(runningTasks);
-        if (runningTasks.length > 0) {
-            const taskBadges = runningTasks.map((t) => `• ⚙️ <b>${escapeHtml(t.name)}</b> (PID ${t.pid}${t.port ? ` · port ${t.port}` : ''})`).join('\n');
-            statusDoneText += `\n\n<b>Active Background:</b>\n${taskBadges}`;
-        }
+        // 1. Leave the status message on actions done
+        const doneStatus = await buildCompletedStatus({
+            channelKey,
+            workspacePath,
+            durationSec,
+            isError: isActualError,
+            isCompact: userPrompt.trim().startsWith('/compact'),
+            recentCompletedActions,
+        });
 
         try {
             await bot.api.editMessageText(
                 chatId,
                 statusMsgId,
-                sanitizeTelegramHtml(statusDoneText),
-                { parse_mode: 'HTML', reply_markup: stopKeyboard }
+                doneStatus.text,
+                { parse_mode: 'HTML', reply_markup: doneStatus.keyboard }
             );
         } catch (err: any) {
             if (!err.message?.includes('message is not modified')) {
@@ -194,34 +157,15 @@ export async function executeTurnWithStatus(
             }
         }
 
-        // 2. Send the actual final response as separate message(s)
-        const cleanResponse = cleanModelResponse(rawResponse);
-        if (cleanResponse) {
-            const formatted = isActualError
-                ? `❌ <b>Error:</b>\n${escapeHtml(cleanResponse || result.error || 'Antigravity execution failed.')}`
-                : formatForTelegram(cleanResponse);
-
-            const chunks = splitTelegramHtml(formatted);
-            for (const chunk of chunks) {
-                try {
-                    await bot.api.sendMessage(chatId, chunk, {
-                        parse_mode: 'HTML',
-                        message_thread_id: threadId,
-                    });
-                } catch (replyErr: any) {
-                    if (replyErr.message?.includes("can't parse entities")) {
-                        logger.warn('[Bot] HTML parse failed on sendMessage, falling back to plain text');
-                        await bot.api.sendMessage(
-                            chatId,
-                            decodeHtmlEntities(chunk.replace(/<[^>]+>/g, '')).slice(0, 4000),
-                            { message_thread_id: threadId }
-                        );
-                    } else {
-                        logger.error('[Bot] Failed to send chunk reply:', replyErr);
-                    }
-                }
-            }
-        }
+        // 2. Deliver actual final response as separate message(s)
+        await deliverTurnResponse(
+            bot,
+            chatId,
+            threadId,
+            rawResponse,
+            isActualError,
+            result.error || 'Antigravity execution failed.'
+        );
 
         agyService.markTurnDelivered(channelKey);
 

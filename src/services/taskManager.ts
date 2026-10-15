@@ -102,9 +102,11 @@ export class TaskManager {
         }
 
         // Force kill via shell kill -9 as guaranteed fallback for rogue daemons
+        // Signal/terminate children first before killing parent to prevent orphan reparenting
         try {
-            exec(`kill -9 ${pid} 2>/dev/null`, () => {});
-            exec(`pkill -P ${pid} 2>/dev/null`, () => {});
+            exec(`pkill -P ${pid} 2>/dev/null`, () => {
+                exec(`kill -9 ${pid} 2>/dev/null`, () => {});
+            });
             killed = true;
         } catch {}
 

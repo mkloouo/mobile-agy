@@ -1,17 +1,7 @@
 import { BotServices } from './types';
-import { taskManager } from '../services/taskManager';
-import { buildStopKeyboard } from './keyboards';
 import { findRecentAskQuestion, presentQuestion } from './questionHandler';
-import {
-    cleanModelResponse,
-    decodeHtmlEntities,
-    describeToolAction,
-    escapeHtml,
-    formatElapsedTime,
-    formatForTelegram,
-    sanitizeTelegramHtml,
-    splitTelegramHtml,
-} from '../utils/telegramFormatter';
+import { describeToolAction } from '../utils/telegramFormatter';
+import { buildProgressStatus, buildCompletedStatus, deliverTurnResponse } from './turnDelivery';
 import { logger } from '../utils/logger';
 
 /**
@@ -32,9 +22,9 @@ export function registerSessionRecovery(services: BotServices): void {
         async (state, _fullText, activeTool, doneAction) => {
             if (!state.chatId || !state.statusMessageId) return;
 
-            const channelKey = state.sessionId;
+            const channelKey = state.channelId || state.sessionId;
             const workspacePath = state.workspacePath;
-            const startTime = state.createdAt || Date.now();
+            const startTime = state.turnStartTime || state.createdAt || Date.now();
 
             if (!completedActionsMap.has(channelKey)) {
                 completedActionsMap.set(channelKey, []);
@@ -62,35 +52,21 @@ export function registerSessionRecovery(services: BotServices): void {
                 if (!force && now - lastEditTime < 2500) return;
                 lastEditTime = now;
 
-                let displayText = '🧠 <b>Antigravity is working (reconnected)...</b>';
-
-                const currentTool = activeToolInfos.get(channelKey);
-                if (currentTool) {
-                    const activeDesc = describeToolAction(currentTool.name, currentTool.params, workspacePath, 'active');
-                    displayText += `\n\n⚙️ ${activeDesc}...`;
-                }
-
-                if (recentCompletedActions.length > 0) {
-                    const actionLines = recentCompletedActions.slice(-4).map((item) => `• ✓ ${item}`);
-                    displayText += `\n\n<b>Recent actions:</b>\n${actionLines.join('\n')}`;
-                }
-
-                const runningTasks = await taskManager.getRunningTasks(channelKey, workspacePath);
-                const stopKeyboard = buildStopKeyboard(runningTasks);
-                if (runningTasks.length > 0) {
-                    const taskBadges = runningTasks.map((t) => `• ⚙️ <b>${escapeHtml(t.name)}</b> (PID ${t.pid}${t.port ? ` · port ${t.port}` : ''})`).join('\n');
-                    displayText += `\n\n<b>Active Background:</b>\n${taskBadges}`;
-                }
-
-                const elapsedSec = Math.max(0, Math.floor((now - startTime) / 1000));
-                displayText += `\n\n⏱️ <i>Actively working: ${formatElapsedTime(elapsedSec)}</i>`;
+                const status = await buildProgressStatus({
+                    channelKey,
+                    workspacePath,
+                    startTime,
+                    activeToolInfo: activeToolInfos.get(channelKey),
+                    recentCompletedActions,
+                    title: '🧠 <b>Antigravity is working (reconnected)...</b>',
+                });
 
                 try {
                     await bot.api.editMessageText(
                         state.chatId,
                         state.statusMessageId,
-                        sanitizeTelegramHtml(displayText),
-                        { parse_mode: 'HTML', reply_markup: stopKeyboard }
+                        status.text,
+                        { parse_mode: 'HTML', reply_markup: status.keyboard }
                     );
                 } catch (err: any) {
                     if (err.parameters?.retry_after) {
@@ -114,7 +90,7 @@ export function registerSessionRecovery(services: BotServices): void {
             await updateTelegramStatus(false);
         },
         async (state, result) => {
-            const channelKey = state.sessionId;
+            const channelKey = state.channelId || state.sessionId;
             const heartbeat = activeHeartbeats.get(channelKey);
             if (heartbeat) {
                 clearInterval(heartbeat);
@@ -128,66 +104,50 @@ export function registerSessionRecovery(services: BotServices): void {
                 if (result.conversationId) {
                     db.saveSession(channelKey, state.workspacePath, result.conversationId, state.threadId);
                 }
+                const durationSec = state.turnStartTime
+                    ? Math.max(1, Math.round((Date.now() - state.turnStartTime) / 1000))
+                    : (result.durationSeconds || 0);
+
                 db.recordTurnUsage(channelKey, {
                     inputTokens: result.usage?.input_tokens || 0,
                     outputTokens: result.usage?.output_tokens || 0,
                     thinkingTokens: result.usage?.thinking_tokens || 0,
                     cacheTokens: result.usage?.cache_read_tokens || 0,
                     totalTokens: result.usage?.total_tokens || 0,
-                    durationSeconds: result.durationSeconds || 0,
+                    durationSeconds: durationSec,
                 });
 
                 // 1. Leave status message on completed state
-                const durationSec = result.durationSeconds || 0;
-                const durationText = durationSec >= 60
-                    ? `${Math.floor(durationSec / 60)}m ${durationSec % 60}s`
-                    : `${durationSec}s`;
-
                 const recentActions = completedActionsMap.get(channelKey) || [];
-                let statusDoneText: string;
-                if (recentActions.length > 0) {
-                    statusDoneText = `✓ <b>Actions completed (reconnected)</b> (${durationText}):\n` +
-                        recentActions.slice(-5).map((a) => `• ✓ ${a}`).join('\n');
-                } else {
-                    statusDoneText = `✓ <b>Completed (reconnected)</b> (${durationText})`;
-                }
+                const doneStatus = await buildCompletedStatus({
+                    channelKey,
+                    workspacePath: state.workspacePath,
+                    durationSec,
+                    isError: result.status === 'ERROR',
+                    reconnected: true,
+                    recentCompletedActions: recentActions,
+                });
 
                 try {
                     await bot.api.editMessageText(
                         state.chatId,
                         state.statusMessageId,
-                        statusDoneText,
-                        { parse_mode: 'HTML' }
+                        doneStatus.text,
+                        { parse_mode: 'HTML', reply_markup: doneStatus.keyboard }
                     );
                 } catch {}
 
                 // 2. Send actual response chunks as new message(s)
-                const rawResponse = cleanModelResponse((result.response || '').trim());
-                if (rawResponse) {
-                    const formatted = formatForTelegram(rawResponse);
-                    const chunks = splitTelegramHtml(formatted);
+                await deliverTurnResponse(
+                    bot,
+                    state.chatId,
+                    state.threadId,
+                    result.response || '',
+                    result.status === 'ERROR',
+                    result.error || 'Execution failed.'
+                );
 
-                    for (const chunk of chunks) {
-                        try {
-                            await bot.api.sendMessage(state.chatId, chunk, {
-                                parse_mode: 'HTML',
-                                message_thread_id: state.threadId,
-                            });
-                        } catch (err: any) {
-                            if (err.message?.includes("can't parse entities")) {
-                                await bot.api.sendMessage(
-                                    state.chatId,
-                                    decodeHtmlEntities(chunk.replace(/<[^>]+>/g, '')).slice(0, 4000),
-                                    { message_thread_id: state.threadId }
-                                );
-                            } else {
-                                logger.error('[Bot] Failed to send recovered chunk:', err);
-                            }
-                        }
-                    }
-                }
-
-                agyService.markTurnDelivered(channelKey);
+                agyService.markTurnDelivered(channelKey, state.currentTurnId);
 
                 if (result.conversationId) {
                     const questionParams = findRecentAskQuestion(result.conversationId);

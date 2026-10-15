@@ -1,12 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { spawn } from 'child_process';
-import { formatShellMessage } from '../src/bot/shell';
+import { formatShellMessage, handleShellCommand } from '../src/bot/shell';
 
 describe('shell execution & formatting', () => {
     describe('formatShellMessage', () => {
         it('formats output in pre/code block with escaped command', () => {
             const formatted = formatShellMessage('echo "hi"', 'hi', '');
-            expect(formatted).toBe('⚡ <b>$ echo "hi"</b>\n<pre><code>hi</code></pre>');
+            expect(formatted).toBe('⚡ <b>$ echo &quot;hi&quot;</b>\n<pre><code>hi</code></pre>');
         });
 
         it('defaults empty output to (no output)', () => {
@@ -95,6 +95,50 @@ describe('shell execution & formatting', () => {
 
             expect(output.trim()).toContain('interactive zsh works');
             expect(exitCode).toBe(0);
+        });
+    });
+
+    describe('handleShellCommand', () => {
+        it('replies with usage guide on empty shell command', async () => {
+            const reply = vi.fn().mockResolvedValue({});
+            const ctx: any = {
+                reply,
+                message: { message_thread_id: 12 },
+            };
+            const services: any = {
+                getChannelKey: () => '123:12',
+                resolveWorkspace: () => '/tmp',
+            };
+
+            await handleShellCommand(ctx, '!', services);
+            expect(reply).toHaveBeenCalledWith(
+                expect.stringContaining('Direct Shell Execution'),
+                expect.objectContaining({ parse_mode: 'HTML', message_thread_id: 12 })
+            );
+        });
+
+        it('cancels active agy task and background tasks on ! kill', async () => {
+            const reply = vi.fn().mockResolvedValue({});
+            const stopSession = vi.fn();
+            const ctx: any = {
+                reply,
+                message: { message_thread_id: 12 },
+            };
+            const services: any = {
+                getChannelKey: () => '123:12',
+                resolveWorkspace: () => '/tmp',
+                agyService: {
+                    isBusy: vi.fn().mockReturnValue(true),
+                    stopSession,
+                },
+            };
+
+            await handleShellCommand(ctx, '! kill', services);
+            expect(stopSession).toHaveBeenCalledWith('123:12');
+            expect(reply).toHaveBeenCalledWith(
+                expect.stringContaining('Cancelled:'),
+                expect.objectContaining({ parse_mode: 'HTML' })
+            );
         });
     });
 });

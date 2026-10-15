@@ -1,9 +1,10 @@
+import { InlineKeyboard } from 'grammy';
 import { BotServices } from './types';
 import { buildChatsUI, buildProjectsUI } from './keyboards';
 import { registerQuestionCallbacks } from './questionHandler';
 import { ConversationSummary } from '../services/conversationService';
 import { taskManager } from '../services/taskManager';
-import { escapeHtml } from '../utils/telegramFormatter';
+import { escapeHtml, formatHumanDate } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
 
 export function registerBotCallbacks(services: BotServices): void {
@@ -34,6 +35,62 @@ export function registerBotCallbacks(services: BotServices): void {
         await ctx.editMessageText(`🗑️ <b>Cleared ${count} queued message(s).</b>`, { parse_mode: 'HTML' });
     });
 
+    // Delete a specific message from queue
+    bot.callbackQuery(/^q_del:(\d+)$/, async (ctx) => {
+        const queueId = parseInt(ctx.match[1], 10);
+        const channelKey = services.getChannelKey(ctx);
+        const item = db.getQueuedMessageById(queueId);
+
+        if (!item) {
+            return ctx.answerCallbackQuery({ text: 'Message is no longer in queue.' });
+        }
+
+        db.deleteQueuedMessage(queueId);
+        await ctx.answerCallbackQuery({ text: `Removed message #${queueId} from queue.` });
+
+        const isQueueListView = ctx.callbackQuery.message?.text?.includes('Queued Messages');
+        if (isQueueListView) {
+            const remaining = db.getQueuedMessages(channelKey);
+            if (remaining.length === 0) {
+                try {
+                    await ctx.editMessageText('📭 <b>Message Queue is now Empty</b>', { parse_mode: 'HTML' });
+                } catch {}
+                return;
+            }
+
+            let queueList = `📬 <b>Queued Messages (${remaining.length}):</b>\n\n`;
+            remaining.forEach((q, idx) => {
+                const preview = q.prompt.length > 45 ? `${q.prompt.slice(0, 42)}...` : q.prompt;
+                const timeTag = q.createdAt ? ` <i>(${formatHumanDate(q.createdAt)})</i>` : '';
+                queueList += `${idx + 1}. <code>${escapeHtml(preview)}</code>${timeTag}\n`;
+            });
+
+            const keyboard = new InlineKeyboard();
+            remaining.slice(0, 8).forEach((q, idx) => {
+                const preview = q.prompt.length > 20 ? `${q.prompt.slice(0, 18)}...` : q.prompt;
+                keyboard
+                    .text(`⚡ #${idx + 1} ${preview}`, `q_force:${q.id}`)
+                    .text(`🗑️ Del #${idx + 1}`, `q_del:${q.id}`)
+                    .row();
+            });
+            keyboard.text('🗑️ Clear Entire Queue', 'clear_queue');
+
+            try {
+                await ctx.editMessageText(queueList, {
+                    parse_mode: 'HTML',
+                    reply_markup: keyboard,
+                });
+            } catch {}
+        } else {
+            try {
+                await ctx.editMessageText(
+                    `🗑️ <b>Queued message cancelled:</b>\n<code>${escapeHtml(item.prompt.slice(0, 200))}</code>`,
+                    { parse_mode: 'HTML' }
+                );
+            } catch {}
+        }
+    });
+
     // Force a specific message from queue now
     bot.callbackQuery(/^q_force:(\d+)$/, async (ctx) => {
         const queueId = parseInt(ctx.match[1], 10);
@@ -47,6 +104,7 @@ export function registerBotCallbacks(services: BotServices): void {
         // If a task is running, stop it to prioritize forced message
         if (services.agyService.isBusy(channelKey)) {
             services.agyService.stopSession(channelKey);
+            await new Promise((r) => setTimeout(r, 250));
         }
 
         await ctx.answerCallbackQuery({ text: `Forcing execution of #${queueId}...` });
