@@ -39,56 +39,43 @@ function formatMarkdownLine(text: string): string {
     return result;
 }
 
-/**
- * Format a date or ISO/SQLite timestamp into human-readable local machine time.
- * Example: Wed, 13th of Aug, 2026 22:40
- */
-export function formatHumanDate(dateInput: string | number | Date): string {
-    if (!dateInput) return '';
+export * from './dateFormatter';
 
-    let d: Date;
-    if (dateInput instanceof Date) {
-        d = dateInput;
-    } else if (typeof dateInput === 'number') {
-        d = new Date(dateInput);
-    } else {
-        const str = String(dateInput).trim();
-        // If string does not specify timezone (like SQLite 'YYYY-MM-DD HH:MM:SS' or ISO without offset),
-        // treat it as UTC so it properly converts to machine local timezone
-        const utcStr = str.includes('T')
-            ? (str.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(str) ? str : str + 'Z')
-            : str.replace(' ', 'T') + 'Z';
-        d = new Date(utcStr);
-        if (isNaN(d.getTime())) {
-            d = new Date(str);
+/**
+ * Clean up intermediate agent status chatter and boilerplate polling loops from model response.
+ */
+export function cleanModelResponse(text: string): string {
+    if (!text) return '';
+
+    const lines = text.split('\n');
+    const cleanedLines: string[] = [];
+    let lastLine = '';
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const trimmed = line.trim();
+
+        // Collapse consecutive identical lines
+        if (trimmed && trimmed === lastLine) {
+            continue;
+        }
+
+        // If line is an isolated intermediate wait/poll phrase (e.g. "Waiting for ... to finish")
+        // and is followed by substantial markdown text, filter out boilerplate wait lines
+        const isWaitLine = /^waiting for (tests?|build|gradle|task|final assertions|command|process).*$/i.test(trimmed) ||
+            /^i will wait for .*$/i.test(trimmed);
+
+        if (isWaitLine && lines.length > 5) {
+            continue;
+        }
+
+        cleanedLines.push(line);
+        if (trimmed) {
+            lastLine = trimmed;
         }
     }
 
-    if (isNaN(d.getTime())) return String(dateInput);
-
-    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-    const weekday = weekdays[d.getDay()];
-    const day = d.getDate();
-    const month = months[d.getMonth()];
-    const year = d.getFullYear();
-
-    const hours = String(d.getHours()).padStart(2, '0');
-    const minutes = String(d.getMinutes()).padStart(2, '0');
-
-    const j = day % 10;
-    const k = day % 100;
-    let suffix = 'th';
-    if (j === 1 && k !== 11) {
-        suffix = 'st';
-    } else if (j === 2 && k !== 12) {
-        suffix = 'nd';
-    } else if (j === 3 && k !== 13) {
-        suffix = 'rd';
-    }
-
-    return `${weekday}, ${day}${suffix} of ${month}, ${year} ${hours}:${minutes}`;
+    return cleanedLines.join('\n').trim();
 }
 
 /**

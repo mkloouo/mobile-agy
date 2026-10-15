@@ -126,11 +126,15 @@ export function registerBotCommands(services: BotServices): void {
         }
 
         const formatNum = (n: number) => n.toLocaleString();
+        const summary = convService.getSummary(session.conversationId);
+        const timeSection = summary?.lastModified
+            ? `• <b>Last Active:</b> ${formatHumanDate(summary.lastModified)}\n`
+            : (session.createdAt ? `• <b>Started:</b> ${formatHumanDate(session.createdAt)}\n` : '');
 
         const usageText = `
 <b>📊 Session Token Usage</b>
 • <b>Conversation:</b> <code>${session.conversationId}</code>
-• <b>Total Turns:</b> ${formatNum(session.totalTurns || 1)}
+${timeSection}• <b>Total Turns:</b> ${formatNum(session.totalTurns || 1)}
 
 <b>Latest Turn:</b>
 • <b>Input:</b> ${formatNum(session.lastInputTokens)} tokens
@@ -245,8 +249,9 @@ export function registerBotCommands(services: BotServices): void {
 
         let queueList = `📬 <b>Queued Messages (${queue.length}):</b>\n\n`;
         queue.forEach((item, idx) => {
-            const preview = item.prompt.length > 50 ? `${item.prompt.slice(0, 47)}...` : item.prompt;
-            queueList += `${idx + 1}. <code>${escapeHtml(preview)}</code>\n`;
+            const preview = item.prompt.length > 45 ? `${item.prompt.slice(0, 42)}...` : item.prompt;
+            const timeTag = item.createdAt ? ` <i>(${formatHumanDate(item.createdAt)})</i>` : '';
+            queueList += `${idx + 1}. <code>${escapeHtml(preview)}</code>${timeTag}\n`;
         });
 
         const keyboard = new InlineKeyboard();
@@ -500,9 +505,10 @@ ${wsSection}
                 db.saveSession(newKey, wsPath, convId, newTopicId);
 
                 await ctx.reply(`👉 Assigned chat to new topic: <b>${escapeHtml(title)}</b>`, { parse_mode: 'HTML' });
+                const timeInfo = summary?.lastModified ? `\n• <b>Last Active:</b> ${formatHumanDate(summary.lastModified)}` : '';
                 await ctx.api.sendMessage(
                     ctx.chat.id,
-                    `🔄 <b>Assigned Conversation:</b> <i>${escapeHtml(title)}</i>\n<code>${convId}</code>\n<b>Workspace:</b> <code>${wsPath}</code>\n\nSend a message here to resume!`,
+                    `🔄 <b>Assigned Conversation:</b> <i>${escapeHtml(title)}</i>\n<code>${convId}</code>\n<b>Workspace:</b> <code>${wsPath}</code>${timeInfo}\n\nSend a message here to resume!`,
                     { parse_mode: 'HTML', message_thread_id: newTopicId }
                 );
                 return;
@@ -512,7 +518,9 @@ ${wsSection}
         const channelKey = services.getChannelKey(ctx);
         const ws = services.resolveWorkspace(channelKey);
         db.saveSession(channelKey, ws, convId, threadId);
-        await ctx.reply(`✅ Linked this topic to conversation <code>${convId}</code>. Send a prompt to continue.`, {
+        const summary = convService.getSummary(convId);
+        const timeInfo = summary?.lastModified ? ` (last active: ${formatHumanDate(summary.lastModified)})` : '';
+        await ctx.reply(`✅ Linked this topic to conversation <code>${convId}</code>${timeInfo}. Send a prompt to continue.`, {
             parse_mode: 'HTML',
         });
     });

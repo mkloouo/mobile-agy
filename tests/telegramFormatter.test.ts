@@ -7,6 +7,7 @@ import {
     splitTelegramHtml,
     formatForTelegram,
     formatHumanDate,
+    cleanModelResponse,
 } from '../src/utils/telegramFormatter';
 
 describe('telegramFormatter', () => {
@@ -117,6 +118,35 @@ describe('telegramFormatter', () => {
             const result = formatHumanDate('2026-10-15 13:38:58');
             expect(result).toContain('of Oct, 2026');
             expect(result).toMatch(/[0-9]{1,2}:[0-9]{2}$/);
+        });
+
+        it('parses quota CEST string into human-readable local time', () => {
+            const result = formatHumanDate('2026-10-21 23:43 CEST');
+            expect(result).toContain('of Oct, 2026');
+            expect(result).toContain('21st');
+        });
+    });
+
+    describe('cleanModelResponse', () => {
+        it('collapses consecutive duplicate lines and strips intermediate wait chatter', () => {
+            const messy = [
+                'I have started the build in tmyway-app.',
+                'Waiting for Gradle build to complete.',
+                'Waiting for Gradle build to complete.',
+                'Running test suite in expo-release.',
+                'Waiting for tests to finish.',
+                'Waiting for tests to finish.',
+                'Waiting for tests to finish.',
+                'What happened in release-problem.txt',
+                '1. The compiler warnings are standard Kotlin deprecations.',
+            ].join('\n');
+
+            const cleaned = cleanModelResponse(messy);
+            expect(cleaned).not.toContain('Waiting for tests to finish.');
+            expect(cleaned).not.toContain('Waiting for Gradle build to complete.');
+            expect(cleaned).toContain('I have started the build in tmyway-app.');
+            expect(cleaned).toContain('What happened in release-problem.txt');
+            expect(cleaned).toContain('1. The compiler warnings are standard Kotlin deprecations.');
         });
     });
 });

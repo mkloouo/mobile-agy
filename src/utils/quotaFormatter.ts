@@ -1,29 +1,6 @@
 import { escapeHtml } from './htmlSanitizer';
-
-/**
- * Format relative time string from a date string (e.g. "in 23m", "in 3h 10m", "in 6d")
- */
-export function formatRelativeTime(dateStr: string): string {
-    // Support CEST / CET timezone tokens in date strings
-    const cleaned = dateStr.replace(/\s+CEST/i, ' +02:00').replace(/\s+CET/i, ' +01:00');
-    const target = new Date(cleaned);
-    if (isNaN(target.getTime())) return '';
-
-    const diffMs = target.getTime() - Date.now();
-    if (diffMs <= 0) return 'soon';
-
-    const diffMin = Math.round(diffMs / 60000);
-    if (diffMin < 60) return `in ${diffMin}m`;
-
-    const diffHours = Math.floor(diffMin / 60);
-    const remMin = diffMin % 60;
-    if (diffHours < 24) {
-        return remMin > 0 ? `in ${diffHours}h ${remMin}m` : `in ${diffHours}h`;
-    }
-
-    const diffDays = Math.round(diffHours / 24);
-    return `in ${diffDays}d`;
-}
+import { formatHumanDate, formatRelativeTime } from './dateFormatter';
+export { formatRelativeTime } from './dateFormatter';
 
 /**
  * Humanize Antigravity account quota output into a structured mobile card.
@@ -82,8 +59,9 @@ export function formatAccountQuota(rawOutput: string): string {
             const timeDesc = rel ? ` (resets ${rel})` : '';
             const typeLabel = item.type.toLowerCase().includes('five') ? '5-Hour Window' : 'Weekly Quota';
 
+            const humanReset = formatHumanDate(item.reset);
             result += `• <b>${typeLabel}:</b> ${badge} <b>${item.pct}%</b> remaining${warn}\n`;
-            result += `  ↳ <i>${escapeHtml(item.reset)}${timeDesc}</i>\n`;
+            result += `  ↳ <i>${escapeHtml(humanReset || item.reset)}${timeDesc}</i>\n`;
         }
     }
 
