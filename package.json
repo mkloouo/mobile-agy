@@ -1,6 +1,6 @@
 {
   "name": "mobile-agy",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Mobile-friendly Telegram interface for Google Antigravity CLI via native stream-json",
   "main": "dist/index.js",
   "bin": {
