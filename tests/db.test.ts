@@ -123,6 +123,11 @@ describe('DatabaseManager', () => {
             expect(foundByUser?.prompt).toBe('Original prompt');
             expect(foundByUser?.userMsgId).toBe(9999);
 
+            // Find with chatId fallback when channelId is mismatched
+            const foundByChatFallback = db.findQueuedMessageByUserMsgId('mismatched_channel', 9999, 123);
+            expect(foundByChatFallback?.id).toBe(qId);
+            expect(foundByChatFallback?.prompt).toBe('Original prompt');
+
             // Update status_msg_id
             const updatedStatus = db.updateQueuedStatusMsgId(qId, 789);
             expect(updatedStatus).toBe(true);

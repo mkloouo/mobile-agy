@@ -46,7 +46,11 @@ export function createBot(config: AppConfig) {
 
     function getChannelKey(ctx: Context, overrideThreadId?: number): string {
         const chatId = ctx.chat?.id;
-        const threadId = overrideThreadId ?? (ctx.message?.message_thread_id || (ctx.callbackQuery?.message as any)?.message_thread_id);
+        const threadId = overrideThreadId ?? (
+            ctx.message?.message_thread_id ||
+            ctx.editedMessage?.message_thread_id ||
+            (ctx.callbackQuery?.message as any)?.message_thread_id
+        );
         return threadId ? `${chatId}:${threadId}` : `${chatId}`;
     }
 

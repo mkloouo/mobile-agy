@@ -130,14 +130,30 @@ export function updateQueuedStatusMsgId(db: Database.Database, id: number, statu
     return stmt.run(statusMsgId, id).changes > 0;
 }
 
-export function findQueuedMessageByUserMsgId(db: Database.Database, channelId: string, userMsgId: number): QueuedMessageRecord | undefined {
-    const row = db.prepare(`
+export function findQueuedMessageByUserMsgId(
+    db: Database.Database,
+    channelId: string,
+    userMsgId: number,
+    chatId?: number
+): QueuedMessageRecord | undefined {
+    let row = db.prepare(`
         SELECT id, channel_id, chat_id, thread_id, status_msg_id, user_msg_id, prompt, created_at
         FROM queued_messages
         WHERE channel_id = ? AND user_msg_id = ?
         ORDER BY id DESC
         LIMIT 1
     `).get(channelId, userMsgId) as any;
+
+    if (!row && chatId) {
+        row = db.prepare(`
+            SELECT id, channel_id, chat_id, thread_id, status_msg_id, user_msg_id, prompt, created_at
+            FROM queued_messages
+            WHERE chat_id = ? AND user_msg_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+        `).get(chatId, userMsgId) as any;
+    }
+
     return row ? mapQueuedRow(row) : undefined;
 }
 

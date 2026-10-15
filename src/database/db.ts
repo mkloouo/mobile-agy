@@ -285,8 +285,8 @@ export class DatabaseManager {
         return updateQueuedStatusMsgId(this.db, id, statusMsgId);
     }
 
-    public findQueuedMessageByUserMsgId(channelId: string, userMsgId: number): QueuedMessageRecord | undefined {
-        return findQueuedMessageByUserMsgId(this.db, channelId, userMsgId);
+    public findQueuedMessageByUserMsgId(channelId: string, userMsgId: number, chatId?: number): QueuedMessageRecord | undefined {
+        return findQueuedMessageByUserMsgId(this.db, channelId, userMsgId, chatId);
     }
 
     public clearQueue(channelId: string): number {

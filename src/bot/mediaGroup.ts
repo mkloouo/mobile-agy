@@ -1,4 +1,4 @@
-import { Context } from 'grammy';
+import { Context, InlineKeyboard } from 'grammy';
 import { BotServices } from './types';
 import { downloadTelegramPhoto } from '../utils/imageHandler';
 import { logger } from '../utils/logger';
@@ -178,14 +178,20 @@ async function processCompletedAlbum(mediaGroupId: string, services: BotServices
     if (services.agyService.isBusy(channelKey)) {
         const queue = services.db.getQueuedMessages(channelKey);
         const queuePos = queue.length + 1;
+        const queueId = services.db.enqueueMessage(channelKey, group.chatId, group.threadId, finalStatusMsgId, userPrompt);
+
+        const keyboard = new InlineKeyboard()
+            .text('⚡ Force Now', `q_force:${queueId}`)
+            .text('🗑️ Delete', `q_del:${queueId}`)
+            .row()
+            .text('📋 Show Queue', 'show_queue');
 
         await services.bot.api.editMessageText(
             group.chatId,
             finalStatusMsgId,
             `📥 <b>Queued (#${queuePos})</b> — will run automatically when current task finishes (${total} photos attached).`,
-            { parse_mode: 'HTML' }
+            { parse_mode: 'HTML', reply_markup: keyboard }
         ).catch(() => {});
-        services.db.enqueueMessage(channelKey, group.chatId, group.threadId, finalStatusMsgId, userPrompt);
         return;
     }
 

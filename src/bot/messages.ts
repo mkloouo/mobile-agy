@@ -88,7 +88,9 @@ async function dispatchPrompt(ctx: Context, initialPrompt: string, services: Bot
 
         const keyboard = new InlineKeyboard()
             .text('⚡ Force Now', `q_force:${queueId}`)
-            .text('🗑️ Delete', `q_del:${queueId}`);
+            .text('🗑️ Delete', `q_del:${queueId}`)
+            .row()
+            .text('📋 Show Queue', 'show_queue');
 
         const preview = userPrompt.length > 50 ? `${userPrompt.slice(0, 47)}...` : userPrompt;
 
@@ -230,10 +232,11 @@ export async function handleEditedMessage(ctx: Context, services: BotServices): 
     const channelKey = services.getChannelKey(ctx);
     const newText = ctx.editedMessage?.text?.trim();
     const userMsgId = ctx.editedMessage?.message_id;
+    const chatId = ctx.chat?.id;
 
     if (!newText || !userMsgId) return;
 
-    const queuedItem = services.db.findQueuedMessageByUserMsgId(channelKey, userMsgId);
+    const queuedItem = services.db.findQueuedMessageByUserMsgId(channelKey, userMsgId, chatId);
     if (!queuedItem) return;
 
     services.db.updateQueuedPrompt(queuedItem.id, newText);
@@ -242,7 +245,9 @@ export async function handleEditedMessage(ctx: Context, services: BotServices): 
     const preview = newText.length > 50 ? `${newText.slice(0, 47)}...` : newText;
     const keyboard = new InlineKeyboard()
         .text('⚡ Force Now', `q_force:${queuedItem.id}`)
-        .text('🗑️ Delete', `q_del:${queuedItem.id}`);
+        .text('🗑️ Delete', `q_del:${queuedItem.id}`)
+        .row()
+        .text('📋 Show Queue', 'show_queue');
 
     try {
         await ctx.api.editMessageText(

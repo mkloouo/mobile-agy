@@ -35,6 +35,47 @@ export function registerBotCallbacks(services: BotServices): void {
         await ctx.editMessageText(`🗑️ <b>Cleared ${count} queued message(s).</b>`, { parse_mode: 'HTML' });
     });
 
+    // Show queue callback
+    bot.callbackQuery('show_queue', async (ctx) => {
+        const channelKey = services.getChannelKey(ctx);
+        const threadId = (ctx.callbackQuery.message as any)?.message_thread_id;
+        const queue = db.getQueuedMessages(channelKey);
+        const isRunning = services.agyService.isBusy(channelKey);
+
+        await ctx.answerCallbackQuery();
+
+        if (queue.length === 0) {
+            await ctx.reply(
+                `📭 <b>Message Queue is Empty</b>\nActive task: ${isRunning ? '⚙️ Running' : '💤 Idle'}`,
+                { parse_mode: 'HTML', message_thread_id: threadId }
+            );
+            return;
+        }
+
+        let queueList = `📬 <b>Queued Messages (${queue.length}):</b>\n\n`;
+        queue.forEach((item, idx) => {
+            const preview = item.prompt.length > 45 ? `${item.prompt.slice(0, 42)}...` : item.prompt;
+            const timeTag = item.createdAt ? ` <i>(${formatHumanDate(item.createdAt)})</i>` : '';
+            queueList += `${idx + 1}. <code>${escapeHtml(preview)}</code>${timeTag}\n`;
+        });
+
+        const keyboard = new InlineKeyboard();
+        queue.slice(0, 8).forEach((item, idx) => {
+            const preview = item.prompt.length > 20 ? `${item.prompt.slice(0, 18)}...` : item.prompt;
+            keyboard
+                .text(`⚡ #${idx + 1} ${preview}`, `q_force:${item.id}`)
+                .text(`🗑️ Del #${idx + 1}`, `q_del:${item.id}`)
+                .row();
+        });
+        keyboard.text('🗑️ Clear Entire Queue', 'clear_queue');
+
+        await ctx.reply(queueList, {
+            parse_mode: 'HTML',
+            reply_markup: keyboard,
+            message_thread_id: threadId,
+        });
+    });
+
     // Delete a specific message from queue
     bot.callbackQuery(/^q_del:(\d+)$/, async (ctx) => {
         const queueId = parseInt(ctx.match[1], 10);
