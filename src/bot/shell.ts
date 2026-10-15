@@ -148,7 +148,19 @@ export async function handleShellCommand(ctx: Context, rawText: string, services
                 });
             }
         } catch (editErr: any) {
-            logger.error('[Bot] Failed to finalize shell output:', editErr);
+            logger.warn('[Bot] Failed to edit shell message, falling back to new reply:', editErr.message);
+            for (const chunk of chunks) {
+                try {
+                    await ctx.reply(chunk, {
+                        parse_mode: 'HTML',
+                        message_thread_id: threadId,
+                    });
+                } catch {
+                    await ctx.reply(chunk.replace(/<[^>]+>/g, ''), {
+                        message_thread_id: threadId,
+                    });
+                }
+            }
         }
     };
 

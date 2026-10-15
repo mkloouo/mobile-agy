@@ -12,6 +12,9 @@ export interface TurnOptions {
     prompt: string;
     autoApprove?: boolean;
     model?: string;
+    chatId?: number;
+    statusMessageId?: number;
+    threadId?: number;
     onInit?: (convId: string) => void;
     onDelta?: (delta: string, fullText: string) => void;
     onToolCall?: (toolName: string, params: any) => void;
@@ -77,6 +80,14 @@ export class AgyStreamService {
         try {
             if (fs.existsSync(paths.statePath)) {
                 const state = JSON.parse(fs.readFileSync(paths.statePath, 'utf-8'));
+                if (state.daemonPid) {
+                    try {
+                        process.kill(state.daemonPid, 0);
+                        return !!state.isBusy;
+                    } catch {
+                        return false;
+                    }
+                }
                 return !!state.isBusy;
             }
         } catch {}
@@ -161,6 +172,9 @@ export class AgyStreamService {
                 action: 'user_prompt',
                 prompt: options.prompt,
                 conversationId: options.conversationId,
+                chatId: options.chatId,
+                statusMessageId: options.statusMessageId,
+                threadId: options.threadId,
             }) + '\n';
 
             session.socket.write(payload, 'utf-8');
@@ -391,6 +405,17 @@ export class AgyStreamService {
             }
 
             case 'step_update': {
+                // Refresh activity timer while agent is actively working
+                if (session.safetyTimer) {
+                    clearTimeout(session.safetyTimer);
+                    session.safetyTimer = setTimeout(() => {
+                        if (session.isBusy) {
+                            logger.warn(`[AgyStream] Turn timed out (no activity for 10m) for session ${session.sessionId}. Stopping.`);
+                            this.stopSession(session.sessionId);
+                        }
+                    }, 10 * 60 * 1000);
+                }
+
                 const step = event.step_update;
                 if (!step) break;
 

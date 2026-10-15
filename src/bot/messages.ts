@@ -1,6 +1,7 @@
 import { Context, InlineKeyboard } from 'grammy';
 import { BotServices } from './types';
 import { handleShellCommand } from './shell';
+import { handleMediaGroupMessage } from './mediaGroup';
 import { downloadTelegramPhoto } from '../utils/imageHandler';
 import { escapeHtml } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
@@ -70,9 +71,16 @@ export async function handleIncomingMessage(ctx: Context, services: BotServices)
         return;
     }
 
+    // Handle Telegram media groups / albums (e.g. sending 9 photos in batch)
+    const mediaGroupId = ctx.message?.media_group_id;
+    if (mediaGroupId && ctx.message?.photo && ctx.message.photo.length > 0) {
+        await handleMediaGroupMessage(ctx, mediaGroupId, services);
+        return;
+    }
+
     let userPrompt = rawText;
 
-    // If photo attached, download it and append path to prompt
+    // If single photo attached, download it and append path to prompt
     if (ctx.message?.photo && ctx.message.photo.length > 0) {
         const largestPhoto = ctx.message.photo[ctx.message.photo.length - 1];
         try {

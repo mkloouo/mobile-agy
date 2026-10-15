@@ -209,6 +209,12 @@ const rlOut = readline.createInterface({
 });
 
 rlOut.on('line', (line) => {
+    state.lastActiveAt = Date.now();
+    if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+    }
+
     const trimmed = line.trim();
     if (!trimmed) return;
 
@@ -286,6 +292,9 @@ const server = net.createServer((socket) => {
             switch (msg.action) {
                 case 'user_prompt': {
                     state.isBusy = true;
+                    if (msg.statusMessageId) state.statusMessageId = msg.statusMessageId;
+                    if (msg.chatId) state.chatId = msg.chatId;
+                    if (msg.threadId) state.threadId = msg.threadId;
                     if (idleTimer) clearTimeout(idleTimer);
                     recentEvents.length = 0; // reset history for new turn
                     saveState();

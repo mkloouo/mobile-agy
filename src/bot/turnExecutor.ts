@@ -24,12 +24,16 @@ export async function executeTurnWithStatus(
 
     let lastEditTime = Date.now();
     let lastRenderedText = '';
+    let rateLimitUntil = 0;
     let activeToolInfo: { name: string; params: any } | null = null;
     const recentCompletedActions: string[] = [];
 
     const updateTelegramStatus = async (force: boolean = false) => {
         const now = Date.now();
-        if (!force && now - lastEditTime < 1500) {
+        if (now < rateLimitUntil) {
+            return;
+        }
+        if (!force && now - lastEditTime < 2500) {
             return;
         }
         lastEditTime = now;
@@ -69,7 +73,10 @@ export async function executeTurnWithStatus(
                 { parse_mode: 'HTML', reply_markup: stopKeyboard }
             );
         } catch (err: any) {
-            if (!err.message?.includes('message is not modified')) {
+            if (err.parameters?.retry_after) {
+                rateLimitUntil = Date.now() + (err.parameters.retry_after * 1000);
+                logger.warn(`[Bot] Rate-limited by Telegram (429). Pausing status edits for ${err.parameters.retry_after}s`);
+            } else if (!err.message?.includes('message is not modified')) {
                 logger.debug('[Bot] editMessageText error:', err.message);
             }
         }
@@ -84,6 +91,9 @@ export async function executeTurnWithStatus(
             prompt: userPrompt,
             autoApprove: config.autoApprove,
             model: selectedModel,
+            chatId,
+            statusMessageId: statusMsgId,
+            threadId,
             onInit: (convId) => {
                 db.saveSession(channelKey, workspacePath, convId, threadId);
             },
@@ -143,6 +153,7 @@ export async function executeTurnWithStatus(
         const chunks = splitTelegramHtml(formatted);
 
         // Edit the initial message with the first chunk
+        let deliverySucceeded = false;
         try {
             await bot.api.editMessageText(
                 chatId,
@@ -150,19 +161,41 @@ export async function executeTurnWithStatus(
                 chunks[0],
                 { parse_mode: 'HTML', reply_markup: stopKeyboard }
             );
+            deliverySucceeded = true;
         } catch (editErr: any) {
             if (editErr.message?.includes('message is not modified')) {
-                // Harmless no-op
+                deliverySucceeded = true;
             } else if (editErr.message?.includes("can't parse entities")) {
                 logger.warn('[Bot] HTML parse failed on editMessageText, falling back to plain text');
-                await bot.api.editMessageText(
-                    chatId,
-                    statusMsgId,
-                    chunks[0].replace(/<[^>]+>/g, '').slice(0, 4000),
-                    { reply_markup: stopKeyboard }
-                );
+                try {
+                    await bot.api.editMessageText(
+                        chatId,
+                        statusMsgId,
+                        chunks[0].replace(/<[^>]+>/g, '').slice(0, 4000),
+                        { reply_markup: stopKeyboard }
+                    );
+                    deliverySucceeded = true;
+                } catch {
+                    // Fall back to sending new message
+                }
             } else {
-                throw editErr;
+                logger.warn('[Bot] editMessageText failed on final delivery (e.g. 429), falling back to sendMessage:', editErr.message);
+            }
+        }
+
+        // If edit failed (e.g. 429 rate limit), send as a new message so the user ALWAYS gets the response!
+        if (!deliverySucceeded) {
+            try {
+                await bot.api.sendMessage(chatId, chunks[0], {
+                    parse_mode: 'HTML',
+                    message_thread_id: threadId,
+                    reply_markup: stopKeyboard,
+                });
+            } catch {
+                await bot.api.sendMessage(chatId, chunks[0].replace(/<[^>]+>/g, '').slice(0, 4000), {
+                    message_thread_id: threadId,
+                    reply_markup: stopKeyboard,
+                });
             }
         }
 
@@ -201,10 +234,14 @@ export async function executeTurnWithStatus(
                 displayErr,
                 { parse_mode: 'HTML' }
             );
-        } catch (fallbackErr: any) {
-            if (!fallbackErr.message?.includes('message is not modified')) {
-                logger.error('[Bot] Failed to render error message:', fallbackErr);
-            }
+        } catch {
+            // Fallback: send as new message if edit fails
+            try {
+                await bot.api.sendMessage(chatId, displayErr, {
+                    parse_mode: 'HTML',
+                    message_thread_id: threadId,
+                });
+            } catch {}
         }
     } finally {
         services.processNextQueuedTurn(channelKey);
