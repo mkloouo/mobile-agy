@@ -34,6 +34,47 @@ export function registerBotCallbacks(services: BotServices): void {
         await ctx.editMessageText(`🗑️ <b>Cleared ${count} queued message(s).</b>`, { parse_mode: 'HTML' });
     });
 
+    // Force a specific message from queue now
+    bot.callbackQuery(/^q_force:(\d+)$/, async (ctx) => {
+        const queueId = parseInt(ctx.match[1], 10);
+        const channelKey = services.getChannelKey(ctx);
+        const item = db.popQueuedMessageById(queueId);
+
+        if (!item) {
+            return ctx.answerCallbackQuery({ text: 'Message no longer in queue.' });
+        }
+
+        // If a task is running, stop it to prioritize forced message
+        if (services.agyService.isBusy(channelKey)) {
+            services.agyService.stopSession(channelKey);
+        }
+
+        await ctx.answerCallbackQuery({ text: `Forcing execution of #${queueId}...` });
+        try {
+            await ctx.editMessageText(
+                `⚡ <b>Forcing execution of queued message:</b>\n<code>${escapeHtml(item.prompt.slice(0, 300))}</code>`,
+                { parse_mode: 'HTML' }
+            );
+        } catch {}
+
+        const workspacePath = services.resolveWorkspace(channelKey);
+        const initialStatus = await ctx.reply('🧠 <i>Antigravity is thinking (forced from queue)...</i>', {
+            parse_mode: 'HTML',
+            message_thread_id: item.threadId,
+        });
+
+        services.executeTurnWithStatus(
+            channelKey,
+            workspacePath,
+            item.prompt,
+            item.chatId,
+            item.threadId,
+            initialStatus.message_id
+        ).catch((err) => {
+            logger.error('[QueueForce] Execution error:', err);
+        });
+    });
+
     // Handle pagination callback for /chats
     bot.callbackQuery(/^chats_p:(\d+):(.*)$/, async (ctx) => {
         const page = parseInt(ctx.match[1], 10) || 0;

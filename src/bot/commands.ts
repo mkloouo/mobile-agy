@@ -9,24 +9,24 @@ import { logger } from '../utils/logger';
 export function registerBotCommands(services: BotServices): void {
     const { bot, config, db, workspaceService, topicManager, convService, agyService } = services;
 
-    // Register /agy_* commands with Telegram so they appear in autocomplete menu
+    // Register commands with Telegram so they appear in autocomplete menu
     bot.api.setMyCommands([
-        { command: 'agy_new', description: 'Create a new topic & conversation' },
-        { command: 'agy_chats', description: 'Browse and assign existing chats' },
-        { command: 'agy_projects', description: 'Select a project workspace' },
-        { command: 'agy_model', description: 'Switch active AI model' },
-        { command: 'agy_compact', description: 'Compact conversation context' },
-        { command: 'agy_usage', description: 'Show account quota and limits' },
-        { command: 'agy_queue', description: 'View queued messages' },
-        { command: 'agy_clear', description: 'Reset conversation in this topic' },
-        { command: 'agy_kill', description: 'Kill last running command or background server' },
-        { command: 'agy_stop', description: 'Stop current running task' },
-        { command: 'agy_restart', description: 'Restart background session and reload tools' },
-        { command: 'agy_status', description: 'Show session and execution status' },
-        { command: 'agy_resume', description: 'Attach a conversation UUID' },
-        { command: 'agy_bind', description: 'Bind topic to a workspace folder' },
-        { command: 'agy_topic', description: 'Rename current topic' },
-        { command: 'agy_help', description: 'Show guide and commands' },
+        { command: 'help', description: 'Show guide and all available commands' },
+        { command: 'new', description: 'Create a new topic & conversation' },
+        { command: 'bind', description: 'Bind topic to any folder path (/cd, /workspace)' },
+        { command: 'model', description: 'Switch active AI model' },
+        { command: 'status', description: 'Show session, workspace, and process status' },
+        { command: 'queue', description: 'View queued messages & force execute now' },
+        { command: 'stop', description: 'Stop currently executing task' },
+        { command: 'kill', description: 'Kill background dev server or process' },
+        { command: 'restart', description: 'Restart session daemon & reload MCP tools' },
+        { command: 'compact', description: 'Compact conversation context' },
+        { command: 'quota', description: 'Show account quota and limits (/usage)' },
+        { command: 'projects', description: 'Browse workspace projects' },
+        { command: 'chats', description: 'Browse and assign existing chats' },
+        { command: 'resume', description: 'Attach a conversation UUID' },
+        { command: 'clear', description: 'Reset conversation in this topic' },
+        { command: 'topic', description: 'Rename current topic' },
     ]).catch((err) => logger.warn('[Bot] Failed to set bot commands menu:', err.message));
 
     // Command: /agy_help, /help, /start, /agy_start
@@ -37,31 +37,40 @@ export function registerBotCommands(services: BotServices): void {
         const currentModel = db.getModel(channelKey) || session?.selectedModel || config.defaultModel || 'Default';
 
         const helpText = `
-<b>🤖 Antigravity CLI Mobile Remote</b>
+<b>🤖 Antigravity CLI Mobile Remote — Commands</b>
 
 <b>Current Workspace:</b> <code>${ws}</code>
 <b>Active Conversation:</b> <code>${session?.conversationId || 'None (New)'}</code>
 <b>Model:</b> <code>${escapeHtml(currentModel)}</code>
 
-<b>Commands:</b>
-• <code>/agy_new &lt;title&gt;</code> - Create a new topic & conversation
-• <code>/agy_model [name]</code> - View or switch active model
-• <code>/agy_compact [focus]</code> - Compact transcript & context window
-• <code>/agy_clear</code> - Reset conversation in this topic
-• <code>/agy_queue</code> - View & manage queued messages
-• <code>/agy_chats [query]</code> - Browse past Antigravity chats with pagination/search
-• <code>/agy_projects</code> - View and select project workspace (creates a topic)
-• <code>/agy_resume &lt;id&gt;</code> - Attach a specific conversation ID to this topic
-• <code>/agy_bind &lt;workspace&gt;</code> - Bind this topic to a workspace folder
-• <code>/agy_topic &lt;name&gt;</code> - Rename current topic
-• <code>/agy_usage</code> - Show account quota and limits
-• <code>/agy_stop</code> - Stop current running task
-• <code>/agy_restart</code> - Restart background session & reload tools
-• <code>/agy_status</code> - Show execution and session info
-• <code>! &lt;cmd&gt;</code> - Direct shell execution (e.g. <code>! git status</code>, <code>! nr start</code>)
-• <code>/agy_help</code> - Show this guide
+<b>Topic & Workspace:</b>
+• <code>/new &lt;title&gt;</code> (or <code>/agy_new</code>) - Create new topic & conversation
+• <code>/bind &lt;path&gt;</code> (or <code>/cd</code>, <code>/workspace</code>) - Bind to any folder path (~, /Users/..., etc.)
+• <code>/projects</code> - Browse projects and auto-create topic
+• <code>/topic &lt;name&gt;</code> - Rename current topic
+• <code>/clear</code> (or <code>/reset</code>) - Reset conversation in this topic
 
-<i>Note: Chatting in General is disabled. Every conversation must be in its own topic.</i>
+<b>Control & Execution:</b>
+• <code>/model [name]</code> - View or switch active model (Flash, Sonnet, Opus)
+• <code>/status</code> - View session, active workspaces, and background servers
+• <code>/queue</code> - View queued messages, force run now, or clear queue
+• <code>/stop</code> - Cancel current running task
+• <code>/kill [pid]</code> - Terminate background server or task
+• <code>/restart</code> - Restart warm session daemon & reload tools
+• <code>! &lt;cmd&gt;</code> - Direct shell execution (e.g. <code>! git status</code>, <code>! npm test</code>)
+
+<b>History & Context:</b>
+• <code>/chats [query]</code> - Browse past Antigravity chats with search
+• <code>/resume &lt;id&gt;</code> - Attach an existing conversation ID
+• <code>/compact [focus]</code> - Compact transcript & context window
+• <code>/quota</code> (or <code>/usage</code>) - Show remaining 5-hour and weekly quota
+
+<b>Input & Large Logs:</b>
+• Paste massive logs (automatically assembled from split messages)
+• Send <code>.log</code>, <code>.txt</code>, <code>.json</code> document files or screenshots
+
+<b>Antigravity Slash Commands:</b>
+• <code>/plan</code>, <code>/goal</code>, <code>/learn</code>, <code>/grill-me</code>, <code>/boost</code>, <code>/browser</code>, <code>/schedule</code>, <code>/caveman</code>, <code>/ponytail</code>, <code>/review</code>, <code>/audit</code>
         `.trim();
 
         await ctx.reply(helpText, { parse_mode: 'HTML' });
@@ -240,7 +249,13 @@ export function registerBotCommands(services: BotServices): void {
             queueList += `${idx + 1}. <code>${escapeHtml(preview)}</code>\n`;
         });
 
-        const keyboard = new InlineKeyboard().text('🗑️ Clear Queue', 'clear_queue');
+        const keyboard = new InlineKeyboard();
+        queue.slice(0, 5).forEach((item, idx) => {
+            const preview = item.prompt.length > 25 ? `${item.prompt.slice(0, 22)}...` : item.prompt;
+            keyboard.text(`⚡ Force #${idx + 1}: ${preview}`, `q_force:${item.id}`).row();
+        });
+        keyboard.text('🗑️ Clear Queue', 'clear_queue');
+
         await ctx.reply(queueList, {
             parse_mode: 'HTML',
             reply_markup: keyboard,

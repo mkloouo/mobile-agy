@@ -252,6 +252,20 @@ export class DatabaseManager {
         return info.changes;
     }
 
+    public popQueuedMessageById(id: number): QueuedMessageRecord | undefined {
+        const selectStmt = this.db.prepare(`
+            SELECT id, channel_id as channelId, chat_id as chatId, thread_id as threadId,
+                   status_msg_id as statusMsgId, prompt, created_at as createdAt
+            FROM queued_messages
+            WHERE id = ?
+        `);
+        const item = selectStmt.get(id) as QueuedMessageRecord | undefined;
+        if (item) {
+            this.db.prepare('DELETE FROM queued_messages WHERE id = ?').run(id);
+        }
+        return item;
+    }
+
     public getDistinctQueuedChannels(): string[] {
         const rows = this.db.prepare('SELECT DISTINCT channel_id FROM queued_messages ORDER BY id ASC').all() as any[];
         return rows.map((r) => r.channel_id);

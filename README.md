@@ -91,18 +91,48 @@ pm2 save
 
 ## Commands
 
+### Control & Execution
+
 | Command | Action |
 | :--- | :--- |
-| `! <cmd>` | Execute shell command directly with live output and instant Stop button |
+| `! <cmd>` | Execute shell command directly with live streaming and instant Stop button |
 | `/model [name]` | Switch AI model for topic (`gemini-3.8-flash-medium`, `claude-sonnet-4-6`, etc.) |
-| `/compact [focus]` | Compact conversation context to stay under token limits |
-| `/kill [pid]` / `/stop` | Cancel active Antigravity turn or kill background servers |
-| `/quota` | View remaining 5-hour and weekly quota across all models |
-| `/agy_new [title]` | Create a new topic and start a fresh session |
-| `/agy_projects` | Browse and bind workspace projects with inline buttons |
-| `/agy_chats [query]` | Search and attach previous conversations |
-| `/agy_status` | View workspace, conversation ID, model, and active background servers |
-| `/agy_help` | View help and available slash commands |
+| `/queue` | View queued prompts, **Force Run Now** (`⚡ Force`), or clear queue |
+| `/stop` | Cancel active Antigravity turn |
+| `/kill [pid]` | Terminate background command or running dev server (Expo, Next.js, Metro) |
+| `/restart` | Restart warm session daemon and reload tools / MCP environment |
+| `/status` | View session status, bound & active workspaces, model, and active servers |
+
+### Workspaces & Navigation
+
+| Command | Action |
+| :--- | :--- |
+| `/bind <path>` | Bind current topic to any folder path (`~`, `/Users/...`, `/etc`, arbitrary) — aliases: `/cd`, `/workspace` |
+| `/new [title]` | Create a new topic and start a fresh session (alias: `/agy_new`) |
+| `/projects` | Browse workspace projects with inline buttons and auto-create topics |
+| `/chats [query]` | Search and attach past conversations with pagination |
+| `/resume <uuid>` | Attach a specific conversation ID to current topic |
+| `/topic <name>` | Rename current topic |
+| `/clear` | Clear active conversation in this topic (keeps workspace binding) — alias: `/reset` |
+
+### Context & Quota
+
+| Command | Action |
+| :--- | :--- |
+| `/compact [focus]` | Compact transcript & context window |
+| `/quota` | View remaining 5-hour and weekly quota across all models (alias: `/usage`) |
+| `/help` | View help and available slash commands |
+
+### Files, Logs & Photos
+
+- **Large Log Pasting**: Paste massive logs directly into Telegram chat. The bot automatically debounces and batches Telegram's 4KB split messages into a single assembled prompt.
+- **Log File Uploads**: Send `.log`, `.txt`, `.json` document files. Small files are read into the prompt; large files are downloaded and referenced for tool inspection.
+- **Screenshots & Media**: Send single photos or photo albums (batched automatically).
+
+### Native Antigravity Commands
+
+The following slash commands pass directly to `agy`:
+`/plan`, `/goal`, `/learn`, `/grill-me`, `/boost`, `/browser`, `/schedule`, `/teamwork-preview`, `/caveman`, `/ponytail`, `/review`, `/audit`.
 
 ---
 
