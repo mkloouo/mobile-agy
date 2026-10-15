@@ -76,8 +76,8 @@ export function registerBotCommands(services: BotServices): void {
         await ctx.reply(helpText, { parse_mode: 'HTML' });
     });
 
-    // Command: /agy_usage - Show overall Antigravity account quota and limits
-    bot.command('agy_usage', async (ctx) => {
+    // Command: /quota, /agy_usage, /agy_quota - Show overall Antigravity account quota and limits
+    bot.command(['quota', 'agy_quota', 'agy_usage'], async (ctx) => {
         const threadId = ctx.message?.message_thread_id;
         const statusMsg = await ctx.reply('⏳ <i>Fetching account quota & usage...</i>', {
             parse_mode: 'HTML',
@@ -116,8 +116,8 @@ export function registerBotCommands(services: BotServices): void {
         });
     });
 
-    // Command: /usage - Show current conversation session token statistics
-    bot.command('usage', async (ctx) => {
+    // Command: /usage, /tokens, /session_usage - Show current conversation session token statistics
+    bot.command(['usage', 'tokens', 'session_usage'], async (ctx) => {
         const channelKey = services.getChannelKey(ctx);
         const session = db.getSession(channelKey);
 
