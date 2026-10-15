@@ -1,4 +1,5 @@
 import { BotServices } from './types';
+import { formatPromptQuote } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
 
 export async function processNextQueuedTurn(services: BotServices, channelKey: string): Promise<void> {
@@ -7,12 +8,13 @@ export async function processNextQueuedTurn(services: BotServices, channelKey: s
     if (!next) return;
 
     const workspacePath = services.resolveWorkspace(channelKey);
+    const quoteHeader = formatPromptQuote(next.prompt);
 
     try {
         await bot.api.editMessageText(
             next.chatId,
             next.statusMsgId,
-            '🧠 <i>Antigravity is thinking...</i>',
+            `${quoteHeader}🧠 <i>Antigravity is thinking...</i>`,
             { parse_mode: 'HTML' }
         );
     } catch {}

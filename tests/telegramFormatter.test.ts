@@ -10,6 +10,7 @@ import {
     formatElapsedTime,
     cleanModelResponse,
     sanitizeTelegramHtml,
+    formatPromptQuote,
 } from '../src/utils/telegramFormatter';
 import { formatDuration } from '../src/utils/dateFormatter';
 
@@ -253,6 +254,35 @@ describe('telegramFormatter', () => {
         it('formats hours, minutes and seconds cleanly', () => {
             expect(formatDuration(3665)).toBe('1h 01m 05s');
             expect(formatDuration(5716.14406)).toBe('1h 35m 16s');
+        });
+    });
+
+    describe('formatPromptQuote', () => {
+        it('returns empty string for undefined or empty prompt', () => {
+            expect(formatPromptQuote()).toBe('');
+            expect(formatPromptQuote('')).toBe('');
+            expect(formatPromptQuote('   ')).toBe('');
+        });
+
+        it('wraps simple prompt in blockquote tags and escapes HTML', () => {
+            expect(formatPromptQuote('Fix <bug> & deploy')).toBe('<blockquote>Fix &lt;bug&gt; &amp; deploy</blockquote>\n\n');
+        });
+
+        it('strips reply context and flattens newlines', () => {
+            const prompt = '[In reply to Alice]:\n"""\nSome previous code\n"""\n\nNow fix the styling\nplease';
+            expect(formatPromptQuote(prompt)).toBe('<blockquote>Now fix the styling please</blockquote>\n\n');
+        });
+
+        it('strips attached file tags', () => {
+            const prompt = '[Attached user screenshot: /tmp/shot.jpg]\nInspect this log';
+            expect(formatPromptQuote(prompt)).toBe('<blockquote>Inspect this log</blockquote>\n\n');
+        });
+
+        it('truncates prompts exceeding maxLen', () => {
+            const longPrompt = 'A'.repeat(150);
+            const quote = formatPromptQuote(longPrompt, 50);
+            expect(quote).toContain('...');
+            expect(quote).toBe(`<blockquote>${'A'.repeat(47)}...</blockquote>\n\n`);
         });
     });
 });

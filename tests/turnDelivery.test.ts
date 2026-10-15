@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { deliverTurnResponse, buildCompletedStatus } from '../src/bot/turnDelivery';
+import { deliverTurnResponse, buildCompletedStatus, buildProgressStatus } from '../src/bot/turnDelivery';
 
 describe('buildCompletedStatus', () => {
     it('formats duration cleanly without decimal artifacts', async () => {
@@ -23,6 +23,32 @@ describe('buildCompletedStatus', () => {
         });
 
         expect(status.text).toContain('(reconnected)</b> (35s)');
+    });
+
+    it('includes prompt quote header when userPrompt is provided', async () => {
+        const status = await buildCompletedStatus({
+            channelKey: 'test',
+            workspacePath: '/tmp',
+            durationSec: 10,
+            userPrompt: 'Build the release artifact',
+        });
+
+        expect(status.text).toContain('<blockquote>Build the release artifact</blockquote>');
+        expect(status.text).toContain('✓ <b>Completed</b> (10s)');
+    });
+});
+
+describe('buildProgressStatus', () => {
+    it('includes prompt quote header when userPrompt is provided', async () => {
+        const status = await buildProgressStatus({
+            channelKey: 'test',
+            workspacePath: '/tmp',
+            startTime: Date.now() - 5000,
+            userPrompt: 'Please update database schema',
+        });
+
+        expect(status.text).toContain('<blockquote>Please update database schema</blockquote>');
+        expect(status.text).toContain('🧠 <b>Antigravity is working...</b>');
     });
 });
 

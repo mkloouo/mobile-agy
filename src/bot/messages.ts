@@ -5,7 +5,7 @@ import { handleShellCommand } from './shell';
 import { handleMediaGroupMessage } from './mediaGroup';
 import { handlePastedText } from './pasteBatcher';
 import { downloadTelegramPhoto, downloadTelegramFile } from '../utils/imageHandler';
-import { escapeHtml } from '../utils/telegramFormatter';
+import { escapeHtml, formatPromptQuote } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
 
 export const ANTIGRAVITY_SLASH_COMMANDS = new Set([
@@ -105,9 +105,11 @@ async function dispatchPrompt(ctx: Context, initialPrompt: string, services: Bot
 
     const workspacePath = services.resolveWorkspace(channelKey);
 
-    const initialStatus = await ctx.reply('🧠 <i>Antigravity is thinking...</i>', {
+    const quoteHeader = formatPromptQuote(userPrompt);
+    const initialStatus = await ctx.reply(`${quoteHeader}🧠 <i>Antigravity is thinking...</i>`, {
         parse_mode: 'HTML',
         message_thread_id: threadId,
+        reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
     });
 
     services.executeTurnWithStatus(

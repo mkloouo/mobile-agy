@@ -191,3 +191,31 @@ export function formatForTelegram(markdown: string): string {
 
     return result.join('\n');
 }
+
+/**
+ * Format a prompt as a concise HTML blockquote header for status messages.
+ */
+export function formatPromptQuote(prompt?: string, maxLen = 120): string {
+    if (!prompt || !prompt.trim()) return '';
+    let clean = prompt.trim();
+
+    // Strip [In reply to sender]:\n"""\n...\n"""\n\n prefix if present
+    const replyMatch = clean.match(/\[In reply to [^\]]+\]:\n"""[\s\S]*?"""\n\n([\s\S]*)$/);
+    if (replyMatch && replyMatch[1]?.trim()) {
+        clean = replyMatch[1].trim();
+    }
+
+    // Remove attached file/image tags
+    clean = clean.replace(/\[Attached (?:user screenshot|local file): [^\]]+\]/g, '').trim();
+    if (!clean) clean = prompt.trim();
+    if (!clean) return '';
+
+    // Flatten newlines into a compact single-line or clean preview
+    clean = clean.replace(/\s+/g, ' ');
+
+    if (clean.length > maxLen) {
+        clean = clean.slice(0, maxLen - 3) + '...';
+    }
+
+    return `<blockquote>${escapeHtml(clean)}</blockquote>\n\n`;
+}

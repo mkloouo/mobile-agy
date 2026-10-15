@@ -42,6 +42,7 @@ export async function executeTurnWithStatus(
             startTime,
             activeToolInfo,
             recentCompletedActions,
+            userPrompt,
         });
 
         try {
@@ -143,6 +144,7 @@ export async function executeTurnWithStatus(
             isError: isActualError,
             isCompact: userPrompt.trim().startsWith('/compact'),
             recentCompletedActions,
+            userPrompt,
         });
 
         try {

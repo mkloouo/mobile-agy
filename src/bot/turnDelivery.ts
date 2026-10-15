@@ -8,6 +8,7 @@ import {
     escapeHtml,
     formatElapsedTime,
     formatForTelegram,
+    formatPromptQuote,
     sanitizeTelegramHtml,
     splitTelegramHtml,
 } from '../utils/telegramFormatter';
@@ -21,6 +22,7 @@ export interface ProgressStatusOptions {
     activeToolInfo?: { name: string; params: any } | null;
     recentCompletedActions?: string[];
     title?: string;
+    userPrompt?: string;
 }
 
 export async function buildProgressStatus(
@@ -33,9 +35,11 @@ export async function buildProgressStatus(
         activeToolInfo,
         recentCompletedActions = [],
         title = '🧠 <b>Antigravity is working...</b>',
+        userPrompt,
     } = options;
 
-    let displayText = title;
+    const quoteHeader = formatPromptQuote(userPrompt);
+    let displayText = `${quoteHeader}${title}`;
 
     if (activeToolInfo) {
         const activeDesc = describeToolAction(activeToolInfo.name, activeToolInfo.params, workspacePath, 'active');
@@ -71,6 +75,7 @@ export interface CompletedStatusOptions {
     isCompact?: boolean;
     reconnected?: boolean;
     recentCompletedActions?: string[];
+    userPrompt?: string;
 }
 
 export async function buildCompletedStatus(
@@ -84,6 +89,7 @@ export async function buildCompletedStatus(
         isCompact = false,
         reconnected = false,
         recentCompletedActions = [],
+        userPrompt,
     } = options;
 
     const durationText = formatDuration(durationSec);
@@ -109,8 +115,10 @@ export async function buildCompletedStatus(
         statusDoneText += `\n\n<b>Active Background:</b>\n${taskBadges}`;
     }
 
+    const quoteHeader = formatPromptQuote(userPrompt);
+
     return {
-        text: sanitizeTelegramHtml(statusDoneText),
+        text: sanitizeTelegramHtml(`${quoteHeader}${statusDoneText}`),
         keyboard: stopKeyboard,
     };
 }
