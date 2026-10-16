@@ -6,6 +6,7 @@ import { handleMediaGroupMessage } from './mediaGroup';
 import { handlePastedText } from './pasteBatcher';
 import { downloadTelegramPhoto, downloadTelegramFile } from '../utils/imageHandler';
 import { escapeHtml, formatPromptQuote } from '../utils/telegramFormatter';
+import { handleQuestionCustomInput } from './questionHandler';
 import { logger } from '../utils/logger';
 
 export const ANTIGRAVITY_SLASH_COMMANDS = new Set([
@@ -165,6 +166,11 @@ export async function handleIncomingMessage(ctx: Context, services: BotServices)
             );
             return;
         }
+    }
+
+    // Intercept custom responses to active question prompts
+    if (await handleQuestionCustomInput(ctx, services)) {
+        return;
     }
 
     // Handle Telegram media groups / albums (e.g. sending 9 photos in batch)

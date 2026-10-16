@@ -1,17 +1,12 @@
 import { Context, InlineKeyboard } from 'grammy';
 import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { BotServices } from './types';
+import { AskQuestionItem, parseQuestions, findRecentAskQuestion } from './questionParser';
 import { escapeHtml } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
 
-export interface AskQuestionItem {
-    question: string;
-    options: string[];
-    is_multi_select?: boolean;
-}
+export * from './questionParser';
+export * from './questionCallbacks';
 
 export interface ActiveQuestionSession {
     id: string;
@@ -22,13 +17,21 @@ export interface ActiveQuestionSession {
     questions: AskQuestionItem[];
     currentQuestionIndex: number;
     selectedIndices: Set<number>;
+    customOptions?: string[];
+    deselectedCustomIndices?: Set<number>;
     answers: string[];
     messageId?: number;
+    customPromptMsgId?: number;
+    awaitingCustomInput?: boolean;
     createdAt: number;
 }
 
 // In-memory store for active question sessions with 1-hour TTL
 const activeSessions = new Map<string, ActiveQuestionSession>();
+
+export function getActiveQuestionSessions(): Map<string, ActiveQuestionSession> {
+    return activeSessions;
+}
 
 function cleanupExpiredSessions(): void {
     const now = Date.now();
@@ -37,89 +40,6 @@ function cleanupExpiredSessions(): void {
             activeSessions.delete(id);
         }
     }
-}
-
-export function parseQuestions(params: any): AskQuestionItem[] {
-    if (!params) return [];
-
-    let qData = params.questions;
-    if (typeof qData === 'string') {
-        try {
-            qData = JSON.parse(qData);
-        } catch {}
-    }
-
-    if (Array.isArray(qData)) {
-        return qData
-            .filter((q: any) => q && typeof q === 'object')
-            .map((q: any) => ({
-                question: String(q.question || 'Please select an option:'),
-                options: Array.isArray(q.options) ? q.options.map(String) : [],
-                is_multi_select: !!q.is_multi_select,
-            }))
-            .filter((q: AskQuestionItem) => q.options.length > 0);
-    }
-
-    let singleOpts = params.options;
-    if (typeof singleOpts === 'string') {
-        try {
-            singleOpts = JSON.parse(singleOpts);
-        } catch {}
-    }
-
-    if (params?.question) {
-        const opts = Array.isArray(singleOpts) ? singleOpts.map(String) : [];
-        if (opts.length > 0) {
-            return [{
-                question: String(params.question),
-                options: opts,
-                is_multi_select: !!params.is_multi_select,
-            }];
-        }
-    }
-
-    return [];
-}
-
-/**
- * Scan the latest turn in conversation transcript to find any ask_question call
- */
-export function findRecentAskQuestion(conversationId: string): any | null {
-    if (!conversationId) return null;
-    const transcriptPath = path.join(
-        os.homedir(),
-        '.gemini',
-        'antigravity-cli',
-        'brain',
-        conversationId,
-        '.system_generated',
-        'logs',
-        'transcript.jsonl'
-    );
-    if (!fs.existsSync(transcriptPath)) return null;
-
-    try {
-        const content = fs.readFileSync(transcriptPath, 'utf-8');
-        const lines = content.trim().split('\n');
-        for (let i = lines.length - 1; i >= 0; i--) {
-            const line = lines[i].trim();
-            if (!line) continue;
-            try {
-                const step = JSON.parse(line);
-                if (step.type === 'USER_INPUT') {
-                    break;
-                }
-                if (Array.isArray(step.tool_calls)) {
-                    const qCall = step.tool_calls.find((tc: any) => tc.name === 'ask_question');
-                    if (qCall?.args) {
-                        return qCall.args;
-                    }
-                }
-            } catch {}
-        }
-    } catch {}
-
-    return null;
 }
 
 const NUMBER_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
@@ -137,6 +57,14 @@ export function buildQuestionUI(session: ActiveQuestionSession): { text: string;
         text += `${numBadge} ${escapeHtml(opt)}\n`;
     });
 
+    const customOpts = session.customOptions || [];
+    if (customOpts.length > 0) {
+        text += '\n<b>Custom options:</b>\n';
+        customOpts.forEach((cOpt) => {
+            text += `✍️ ${escapeHtml(cOpt)}\n`;
+        });
+    }
+
     if (currentQ.is_multi_select) {
         text += '\n<i>(Multi-select: toggle options then click Submit)</i>';
     }
@@ -152,7 +80,17 @@ export function buildQuestionUI(session: ActiveQuestionSession): { text: string;
             keyboard.text(`${checkMark} ${label}`, `q_toggle:${session.id}:${idx}`).row();
         });
 
-        const selectedCount = session.selectedIndices.size;
+        customOpts.forEach((cOpt, cIdx) => {
+            const isChecked = !session.deselectedCustomIndices?.has(cIdx);
+            const checkMark = isChecked ? '☑️' : '◻️';
+            let label = cOpt.trim();
+            if (label.length > 30) label = label.slice(0, 27) + '...';
+            keyboard.text(`${checkMark} ✍️ ${label}`, `q_toggle_c:${session.id}:${cIdx}`).row();
+        });
+
+        keyboard.text('✍️ Your option', `q_custom:${session.id}`).row();
+
+        const selectedCount = session.selectedIndices.size + (customOpts.length - (session.deselectedCustomIndices?.size || 0));
         keyboard
             .text(`✅ Submit (${selectedCount})`, `q_submit:${session.id}`)
             .text('⏭️ Skip', `q_skip:${session.id}`);
@@ -164,10 +102,98 @@ export function buildQuestionUI(session: ActiveQuestionSession): { text: string;
             keyboard.text(`${numBadge} ${label}`, `q_select:${session.id}:${idx}`).row();
         });
 
+        keyboard.text('✍️ Your option', `q_custom:${session.id}`).row();
         keyboard.text('⏭️ Skip question', `q_skip:${session.id}`);
     }
 
     return { text: text.trim(), keyboard };
+}
+
+export async function clearCustomPrompt(session: ActiveQuestionSession, services: BotServices): Promise<void> {
+    if (session.customPromptMsgId) {
+        try {
+            await services.bot.api.deleteMessage(session.chatId, session.customPromptMsgId);
+        } catch {}
+        session.customPromptMsgId = undefined;
+    }
+    session.awaitingCustomInput = false;
+}
+
+export function findSessionForCustomInput(
+    channelKey: string,
+    replyToMsgId?: number
+): ActiveQuestionSession | undefined {
+    if (replyToMsgId) {
+        for (const session of activeSessions.values()) {
+            if (session.messageId === replyToMsgId || session.customPromptMsgId === replyToMsgId) {
+                return session;
+            }
+        }
+    }
+    for (const session of activeSessions.values()) {
+        if (session.channelKey === channelKey && session.awaitingCustomInput) {
+            return session;
+        }
+    }
+    return undefined;
+}
+
+export async function handleQuestionCustomInput(ctx: Context, services: BotServices): Promise<boolean> {
+    const rawText = ctx.message?.text || ctx.message?.caption;
+    if (!rawText || !rawText.trim()) return false;
+    if (rawText.trim().startsWith('/')) return false;
+
+    const channelKey = services.getChannelKey(ctx);
+    const replyToMsgId = ctx.message?.reply_to_message?.message_id;
+
+    const session = findSessionForCustomInput(channelKey, replyToMsgId);
+    if (!session) return false;
+
+    await clearCustomPrompt(session, services);
+    const customText = rawText.trim();
+    const currentQ = session.questions[session.currentQuestionIndex];
+
+    if (currentQ.is_multi_select) {
+        if (!session.customOptions) session.customOptions = [];
+        session.customOptions.push(customText);
+
+        const { text, keyboard } = buildQuestionUI(session);
+        if (session.messageId) {
+            try {
+                await services.bot.api.editMessageText(
+                    session.chatId,
+                    session.messageId,
+                    text,
+                    { parse_mode: 'HTML', reply_markup: keyboard }
+                );
+            } catch {}
+        }
+        return true;
+    }
+
+    session.answers.push(customText);
+
+    if (session.currentQuestionIndex + 1 < session.questions.length) {
+        session.currentQuestionIndex++;
+        session.selectedIndices.clear();
+        session.customOptions = [];
+        session.deselectedCustomIndices?.clear();
+        const { text, keyboard } = buildQuestionUI(session);
+        if (session.messageId) {
+            try {
+                await services.bot.api.editMessageText(
+                    session.chatId,
+                    session.messageId,
+                    text,
+                    { parse_mode: 'HTML', reply_markup: keyboard }
+                );
+            } catch {}
+        }
+    } else {
+        await finalizeAnswer(session, services);
+    }
+
+    return true;
 }
 
 export async function presentQuestion(
@@ -214,8 +240,9 @@ export async function presentQuestion(
     }
 }
 
-async function finalizeAnswer(session: ActiveQuestionSession, services: BotServices, ctx: Context): Promise<void> {
+export async function finalizeAnswer(session: ActiveQuestionSession, services: BotServices): Promise<void> {
     activeSessions.delete(session.id);
+    await clearCustomPrompt(session, services);
 
     const formattedAnswers = session.answers
         .map((ans, idx) => session.questions.length > 1 ? `A${idx + 1}: ${ans}` : `A1: ${ans}`)
@@ -229,9 +256,14 @@ async function finalizeAnswer(session: ActiveQuestionSession, services: BotServi
         .join('\n\n');
 
     try {
-        await ctx.editMessageText(`✅ <b>Question answered:</b>\n\n${summaryText}`, {
-            parse_mode: 'HTML',
-        });
+        if (session.messageId) {
+            await services.bot.api.editMessageText(
+                session.chatId,
+                session.messageId,
+                `✅ <b>Question answered:</b>\n\n${summaryText}`,
+                { parse_mode: 'HTML' }
+            );
+        }
     } catch {}
 
     const statusMsg = await services.bot.api.sendMessage(
@@ -252,110 +284,5 @@ async function finalizeAnswer(session: ActiveQuestionSession, services: BotServi
         statusMsg.message_id
     ).catch((err) => {
         logger.error('[QuestionHandler] Error executing turn with answer:', err);
-    });
-}
-
-export function registerQuestionCallbacks(services: BotServices): void {
-    const { bot } = services;
-
-    // Single-select option callback
-    bot.callbackQuery(/^q_select:([a-f0-9]+):(\d+)$/, async (ctx) => {
-        const qid = ctx.match[1];
-        const optIdx = parseInt(ctx.match[2], 10);
-        const session = activeSessions.get(qid);
-
-        if (!session) {
-            return ctx.answerCallbackQuery({ text: 'Question expired or already answered.' });
-        }
-
-        const currentQ = session.questions[session.currentQuestionIndex];
-        const selectedText = currentQ.options[optIdx] || `Option ${optIdx + 1}`;
-        session.answers.push(selectedText);
-
-        await ctx.answerCallbackQuery({ text: `Selected: ${selectedText.slice(0, 30)}` });
-
-        if (session.currentQuestionIndex + 1 < session.questions.length) {
-            session.currentQuestionIndex++;
-            session.selectedIndices.clear();
-            const { text, keyboard } = buildQuestionUI(session);
-            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-        } else {
-            await finalizeAnswer(session, services, ctx);
-        }
-    });
-
-    // Multi-select toggle option callback
-    bot.callbackQuery(/^q_toggle:([a-f0-9]+):(\d+)$/, async (ctx) => {
-        const qid = ctx.match[1];
-        const optIdx = parseInt(ctx.match[2], 10);
-        const session = activeSessions.get(qid);
-
-        if (!session) {
-            return ctx.answerCallbackQuery({ text: 'Question expired or already answered.' });
-        }
-
-        if (session.selectedIndices.has(optIdx)) {
-            session.selectedIndices.delete(optIdx);
-        } else {
-            session.selectedIndices.add(optIdx);
-        }
-
-        await ctx.answerCallbackQuery();
-        const { text, keyboard } = buildQuestionUI(session);
-        try {
-            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-        } catch {}
-    });
-
-    // Multi-select submit callback
-    bot.callbackQuery(/^q_submit:([a-f0-9]+)$/, async (ctx) => {
-        const qid = ctx.match[1];
-        const session = activeSessions.get(qid);
-
-        if (!session) {
-            return ctx.answerCallbackQuery({ text: 'Question expired or already answered.' });
-        }
-
-        const currentQ = session.questions[session.currentQuestionIndex];
-        const selected = Array.from(session.selectedIndices)
-            .sort((a, b) => a - b)
-            .map((idx) => currentQ.options[idx])
-            .filter(Boolean);
-
-        const answerText = selected.length > 0 ? selected.join(', ') : 'None selected';
-        session.answers.push(answerText);
-
-        await ctx.answerCallbackQuery({ text: 'Answer submitted' });
-
-        if (session.currentQuestionIndex + 1 < session.questions.length) {
-            session.currentQuestionIndex++;
-            session.selectedIndices.clear();
-            const { text, keyboard } = buildQuestionUI(session);
-            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-        } else {
-            await finalizeAnswer(session, services, ctx);
-        }
-    });
-
-    // Skip callback
-    bot.callbackQuery(/^q_skip:([a-f0-9]+)$/, async (ctx) => {
-        const qid = ctx.match[1];
-        const session = activeSessions.get(qid);
-
-        if (!session) {
-            return ctx.answerCallbackQuery({ text: 'Question expired or already answered.' });
-        }
-
-        session.answers.push('User Skipped');
-        await ctx.answerCallbackQuery({ text: 'Skipped' });
-
-        if (session.currentQuestionIndex + 1 < session.questions.length) {
-            session.currentQuestionIndex++;
-            session.selectedIndices.clear();
-            const { text, keyboard } = buildQuestionUI(session);
-            await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-        } else {
-            await finalizeAnswer(session, services, ctx);
-        }
     });
 }
