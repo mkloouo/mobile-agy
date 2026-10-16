@@ -78,6 +78,28 @@ export class AgyStreamService {
     }
 
     /**
+     * Check if any active session is currently executing a turn
+     */
+    public hasBusySessions(): boolean {
+        for (const session of this.sessions.values()) {
+            if (session.isBusy) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Cleanly close all Unix socket connections without terminating background daemons
+     */
+    public disconnectAll(): void {
+        for (const session of this.sessions.values()) {
+            try {
+                session.socket.end();
+            } catch {}
+        }
+        this.sessions.clear();
+    }
+
+    /**
      * Stop active execution for a session (keeps warm daemon alive)
      */
     public stopSession(sessionId: string): boolean {

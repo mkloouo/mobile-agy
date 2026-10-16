@@ -69,7 +69,9 @@ function broadcast(data: any): void {
     const line = JSON.stringify(data) + '\n';
     for (const client of connectedClients) {
         try {
-            client.write(line);
+            client.write(line, (err) => {
+                if (err) connectedClients.delete(client);
+            });
         } catch {
             connectedClients.delete(client);
         }
@@ -278,6 +280,17 @@ agyProc.on('close', (code, signal) => {
 
 // Create Unix Domain Socket Server
 const server = net.createServer((socket) => {
+    socket.on('error', (err) => {
+        connectedClients.delete(socket);
+        log('Socket client error:', err.message);
+    });
+
+    socket.on('close', () => {
+        connectedClients.delete(socket);
+        log(`Bot disconnected from Unix socket. Remaining clients: ${connectedClients.size}, isBusy: ${state.isBusy}`);
+        resetIdleTimer();
+    });
+
     connectedClients.add(socket);
     log(`Bot connected to Unix socket. Total clients: ${connectedClients.size}`);
 
@@ -288,7 +301,9 @@ const server = net.createServer((socket) => {
         currentTurnId: state.currentTurnId,
         history: recentEvents,
         accumulatedResponse: state.isBusy ? (state.accumulatedResponse || '') : '',
-    }) + '\n');
+    }) + '\n', (err) => {
+        if (err) connectedClients.delete(socket);
+    });
 
     const rlSocket = readline.createInterface({
         input: socket,
@@ -319,12 +334,7 @@ const server = net.createServer((socket) => {
                     log(`Received user_prompt turnId=${state.currentTurnId} (len: ${msg.prompt?.length}, statusMsgId: ${msg.statusMessageId}, threadId: ${msg.threadId})`);
                     saveState();
 
-                    const promptPayload = JSON.stringify({
-                        event: 'user',
-                        message: {
-                            content: msg.prompt,
-                        },
-                    }) + '\n';
+                    const promptPayload = JSON.stringify({ event: 'user', message: { content: msg.prompt } }) + '\n';
 
                     agyProc?.stdin?.write(promptPayload, 'utf-8');
                     break;
@@ -376,17 +386,6 @@ const server = net.createServer((socket) => {
         } catch (err: any) {
             log('Error handling socket command:', err?.message || err);
         }
-    });
-
-    socket.on('close', () => {
-        connectedClients.delete(socket);
-        log(`Bot disconnected from Unix socket. Remaining clients: ${connectedClients.size}, isBusy: ${state.isBusy}`);
-        resetIdleTimer();
-    });
-
-    socket.on('error', (err) => {
-        connectedClients.delete(socket);
-        log('Socket client error:', err.message);
     });
 });
 

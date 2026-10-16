@@ -38,19 +38,26 @@ program
         logger.info(`Workspace Base Dir: ${config.workspaceBaseDir}`);
         logger.info(`Allowed User IDs: ${config.allowedUserIds.length > 0 ? config.allowedUserIds.join(', ') : 'All (Unrestricted)'}`);
 
-        const { bot } = createBot(config);
+        const { bot, agyService } = createBot(config);
 
         // Graceful shutdown
-        process.once('SIGINT', () => {
-            logger.info('Stopping bot...');
-            bot.stop();
+        const gracefulShutdown = async (signal: string) => {
+            logger.info(`Received ${signal}. Gracefully stopping bot...`);
+            try {
+                bot.stop();
+            } catch {}
+
+            if (agyService.hasBusySessions()) {
+                logger.info('[Shutdown] In-flight turn detected. Allowing up to 2.5s for delivery buffer flush...');
+                await new Promise((r) => setTimeout(r, 2500));
+            }
+
+            agyService.disconnectAll();
             process.exit(0);
-        });
-        process.once('SIGTERM', () => {
-            logger.info('Stopping bot...');
-            bot.stop();
-            process.exit(0);
-        });
+        };
+
+        process.once('SIGINT', () => { gracefulShutdown('SIGINT'); });
+        process.once('SIGTERM', () => { gracefulShutdown('SIGTERM'); });
 
         await bot.start({
             onStart: (botInfo) => {
