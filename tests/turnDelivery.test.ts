@@ -1,5 +1,32 @@
 import { describe, it, expect, vi } from 'vitest';
-import { deliverTurnResponse, buildCompletedStatus, buildProgressStatus } from '../src/bot/turnDelivery';
+import { deliverTurnResponse, buildCompletedStatus, buildProgressStatus, isActualTurnError } from '../src/bot/turnDelivery';
+
+describe('isActualTurnError', () => {
+    it('returns false for SUCCESS status regardless of response content', () => {
+        expect(isActualTurnError('SUCCESS', 'All tasks finished')).toBe(false);
+        expect(isActualTurnError('SUCCESS', '')).toBe(false);
+        expect(isActualTurnError(undefined, 'Done')).toBe(false);
+    });
+
+    it('returns true when status is ERROR and response is empty', () => {
+        expect(isActualTurnError('ERROR', '')).toBe(true);
+        expect(isActualTurnError('ERROR', undefined)).toBe(true);
+        expect(isActualTurnError('ERROR', '   ')).toBe(true);
+    });
+
+    it('returns true when status is ERROR and response contains explicit crash prefix', () => {
+        expect(isActualTurnError('ERROR', '❌ Antigravity error: process exited 1')).toBe(true);
+        expect(isActualTurnError('ERROR', 'Fatal error: out of memory')).toBe(true);
+        expect(isActualTurnError('ERROR', 'panic: runtime error')).toBe(true);
+        expect(isActualTurnError('ERROR', 'agent executor error: failed')).toBe(true);
+        expect(isActualTurnError('ERROR', 'Something AGY_ERROR: broken')).toBe(true);
+    });
+
+    it('returns false when status is ERROR but model returned a valid complete answer', () => {
+        const successfulResponse = 'Added default "Your option" write-in support for single and multi-select questions.';
+        expect(isActualTurnError('ERROR', successfulResponse)).toBe(false);
+    });
+});
 
 describe('buildCompletedStatus', () => {
     it('formats duration cleanly without decimal artifacts', async () => {

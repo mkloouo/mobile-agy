@@ -19,6 +19,7 @@ export interface DaemonSessionRecord {
     turnDelivered: boolean;
     lastStatus?: string;
     lastDurationSeconds: number;
+    userPrompt?: string;
     createdAt: number;
     updatedAt: number;
 }

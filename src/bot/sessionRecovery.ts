@@ -1,7 +1,7 @@
 import { BotServices } from './types';
 import { findRecentAskQuestion, presentQuestion } from './questionHandler';
 import { describeToolAction } from '../utils/telegramFormatter';
-import { buildProgressStatus, buildCompletedStatus, deliverTurnResponse } from './turnDelivery';
+import { buildProgressStatus, buildCompletedStatus, deliverTurnResponse, isActualTurnError } from './turnDelivery';
 import { logger } from '../utils/logger';
 
 /**
@@ -59,6 +59,7 @@ export function registerSessionRecovery(services: BotServices): void {
                     activeToolInfo: activeToolInfos.get(channelKey),
                     recentCompletedActions,
                     title: '🧠 <b>Antigravity is working (reconnected)...</b>',
+                    userPrompt: state.userPrompt,
                 });
 
                 try {
@@ -119,13 +120,17 @@ export function registerSessionRecovery(services: BotServices): void {
 
                 // 1. Leave status message on completed state
                 const recentActions = completedActionsMap.get(channelKey) || [];
+                const rawResponse = (result.response || '').trim();
+                const isActualError = isActualTurnError(result.status, rawResponse);
+
                 const doneStatus = await buildCompletedStatus({
                     channelKey,
                     workspacePath: state.workspacePath,
                     durationSec,
-                    isError: result.status === 'ERROR',
+                    isError: isActualError,
                     reconnected: true,
                     recentCompletedActions: recentActions,
+                    userPrompt: state.userPrompt,
                 });
 
                 try {
@@ -142,8 +147,8 @@ export function registerSessionRecovery(services: BotServices): void {
                     bot,
                     state.chatId,
                     state.threadId,
-                    result.response || '',
-                    result.status === 'ERROR',
+                    rawResponse,
+                    isActualError,
                     result.error || 'Execution failed.'
                 );
 

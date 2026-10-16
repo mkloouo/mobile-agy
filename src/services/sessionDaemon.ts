@@ -225,6 +225,9 @@ rlOut.on('line', (line) => {
                 : (event.result?.duration_seconds ? Math.max(1, Math.round(event.result.duration_seconds)) : 0);
             if (event.result) {
                 event.result.duration_seconds = turnDurationSec;
+                if (!event.result.response && state.accumulatedResponse) {
+                    event.result.response = state.accumulatedResponse;
+                }
             }
             state.lastResult = {
                 ...event.result,
@@ -306,6 +309,7 @@ const server = net.createServer((socket) => {
                     state.accumulatedResponse = '';
                     state.currentTurnId = msg.turnId || generateTurnId();
                     state.turnStartTime = Date.now();
+                    state.userPrompt = msg.prompt || '';
                     delete state.lastResult;
                     if (msg.statusMessageId) state.statusMessageId = msg.statusMessageId;
                     if (msg.chatId) state.chatId = msg.chatId;

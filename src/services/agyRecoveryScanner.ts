@@ -58,6 +58,7 @@ export async function scanAndRecoverSessions(
                         turnDelivered: Boolean(state.turnDelivered),
                         lastStatus: state.lastResult?.status,
                         lastDurationSeconds: state.lastResult?.duration_seconds || 0,
+                        userPrompt: state.userPrompt,
                         createdAt: state.createdAt || Date.now(),
                         updatedAt: state.lastActiveAt || Date.now(),
                     };
@@ -98,6 +99,7 @@ async function recoverSessionRecord(
         chatId: record.chatId,
         threadId: record.threadId,
         accumulatedResponse: record.accumulatedResponse,
+        userPrompt: (record as any).userPrompt,
         turnDelivered: record.turnDelivered,
         lastResult: record.lastStatus ? {
             status: record.lastStatus,

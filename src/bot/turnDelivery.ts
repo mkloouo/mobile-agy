@@ -147,6 +147,21 @@ async function sendWithRetry(
     }
 }
 
+export function isActualTurnError(status?: string, rawResponse?: string): boolean {
+    const resp = (rawResponse || '').trim();
+    if (status !== 'ERROR') return false;
+
+    const isExplicitError =
+        resp.startsWith('❌ Antigravity error:') ||
+        resp.startsWith('❌ Antigravity process exited') ||
+        resp.startsWith('agent executor error:') ||
+        resp.includes('AGY_ERROR:') ||
+        resp.startsWith('Fatal error:') ||
+        resp.startsWith('panic:');
+
+    return !resp || isExplicitError;
+}
+
 export async function deliverTurnResponse(
     bot: any,
     chatId: number,

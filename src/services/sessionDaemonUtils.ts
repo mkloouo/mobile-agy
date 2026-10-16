@@ -32,6 +32,7 @@ export interface DaemonState {
     lastResult?: any;
     turnDelivered?: boolean;
     accumulatedResponse?: string;
+    userPrompt?: string;
 }
 
 export function generateTurnId(): string {

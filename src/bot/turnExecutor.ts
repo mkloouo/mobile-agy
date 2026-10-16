@@ -1,7 +1,7 @@
 import { BotServices } from './types';
 import { presentQuestion, findRecentAskQuestion } from './questionHandler';
 import { describeToolAction, escapeHtml } from '../utils/telegramFormatter';
-import { buildProgressStatus, buildCompletedStatus, deliverTurnResponse } from './turnDelivery';
+import { buildProgressStatus, buildCompletedStatus, deliverTurnResponse, isActualTurnError } from './turnDelivery';
 import { logger } from '../utils/logger';
 
 export { registerSessionRecovery } from './sessionRecovery';
@@ -121,16 +121,7 @@ export async function executeTurnWithStatus(
         });
 
         const rawResponse = (result.response || '').trim();
-
-        const isExplicitError =
-            rawResponse.startsWith('❌ Antigravity error:') ||
-            rawResponse.startsWith('❌ Antigravity process exited') ||
-            rawResponse.startsWith('agent executor error:') ||
-            rawResponse.includes('AGY_ERROR:') ||
-            rawResponse.startsWith('Fatal error:') ||
-            rawResponse.startsWith('panic:');
-
-        const isActualError = result.status === 'ERROR' && (!rawResponse || isExplicitError);
+        const isActualError = isActualTurnError(result.status, rawResponse);
 
         if (isActualError) {
             agyService.restartSession(channelKey).catch(() => {});
