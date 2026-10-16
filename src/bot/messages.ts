@@ -109,7 +109,6 @@ async function dispatchPrompt(ctx: Context, initialPrompt: string, services: Bot
     const initialStatus = await ctx.reply(`${quoteHeader}🧠 <i>Antigravity is thinking...</i>`, {
         parse_mode: 'HTML',
         message_thread_id: threadId,
-        reply_parameters: ctx.message ? { message_id: ctx.message.message_id } : undefined,
     });
 
     services.executeTurnWithStatus(
