@@ -5,10 +5,26 @@ import { taskManager } from '../services/taskManager';
 import { escapeHtml, splitTelegramHtml, stripAnsi } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
 
-export function formatShellMessage(shellCmd: string, bodyText: string, statusTag: string): string {
-    let clean = stripAnsi(bodyText).trim();
+export function extractTailLines(text: string, maxLines = 10): string {
+    const clean = stripAnsi(text).trim();
+    if (!clean) return '(no output)';
+    const lines = clean.split('\n');
+    if (lines.length <= maxLines) {
+        return clean;
+    }
+    const hiddenCount = lines.length - maxLines;
+    return `... [${hiddenCount} lines above] ...\n` + lines.slice(-maxLines).join('\n');
+}
+
+export function formatShellMessage(
+    shellCmd: string,
+    bodyText: string,
+    statusTag: string,
+    tailOnly = false
+): string {
+    let clean = tailOnly ? extractTailLines(bodyText, 10) : stripAnsi(bodyText).trim();
     if (!clean) clean = '(no output)';
-    if (clean.length > 8000) {
+    if (!tailOnly && clean.length > 8000) {
         clean = clean.slice(0, 4000) + '\n\n... [output truncated, ' + clean.length + ' chars total] ...\n\n' + clean.slice(-3000);
     }
     return `⚡ <b>$ ${escapeHtml(shellCmd)}</b>${statusTag}\n<pre><code>${escapeHtml(clean)}</code></pre>`;
@@ -54,7 +70,13 @@ export async function handleShellCommand(ctx: Context, rawText: string, services
     const child = spawn(process.env.SHELL || '/bin/zsh', ['-i', '-c', shellCmd], {
         cwd: workspacePath,
         detached: true,
-        env: { ...process.env, PAGER: 'cat' },
+        env: {
+            ...process.env,
+            PAGER: 'cat',
+            PYTHONUNBUFFERED: '1',
+            FORCE_COLOR: '1',
+            CI: '1',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -86,7 +108,8 @@ export async function handleShellCommand(ctx: Context, rawText: string, services
         if (pid && !hasExited) {
             taskManager.registerProcess(pid, child, shellCmd, channelKey, workspacePath, ctx.chat!.id, msg.message_id, threadId);
 
-            // Periodically refresh running output if still active after 2.5s
+            let lastRenderedText = '';
+            // Periodically refresh running output (last 10 lines) every 2.5s
             runningTimer = setInterval(async () => {
                 if (hasExited || !pid) {
                     if (runningTimer) clearInterval(runningTimer);
@@ -94,20 +117,26 @@ export async function handleShellCommand(ctx: Context, rawText: string, services
                 }
 
                 const statusTag = ` [Running · PID ${pid}]`;
-                const msgText = formatShellMessage(shellCmd, outputBuffer || '(process running in background...)', statusTag);
-                const chunks = splitTelegramHtml(msgText);
+                const msgText = formatShellMessage(shellCmd, outputBuffer || '(process running in background...)', statusTag, true);
+
+                if (msgText === lastRenderedText) {
+                    return;
+                }
+                lastRenderedText = msgText;
 
                 try {
                     await ctx.api.editMessageText(
                         ctx.chat!.id,
                         msg.message_id,
-                        chunks[0],
+                        msgText,
                         { parse_mode: 'HTML', reply_markup: stopKeyboard }
                     );
                 } catch (err: any) {
-                    logger.debug('[Shell] Failed to edit background status:', err.message);
+                    if (!err.message?.includes('message is not modified')) {
+                        logger.debug('[Shell] Failed to edit background status:', err.message);
+                    }
                 }
-            }, 3000);
+            }, 2500);
         }
         return msg;
     }).catch((err) => {

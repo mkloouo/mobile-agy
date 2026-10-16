@@ -193,9 +193,9 @@ export function formatForTelegram(markdown: string): string {
 }
 
 /**
- * Format a prompt as a concise HTML blockquote header for status messages.
+ * Format a prompt as a native expandable HTML blockquote header for status messages.
  */
-export function formatPromptQuote(prompt?: string, maxLen = 120): string {
+export function formatPromptQuote(prompt?: string, maxLen = 800): string {
     if (!prompt || !prompt.trim()) return '';
     let clean = prompt.trim();
 
@@ -210,12 +210,12 @@ export function formatPromptQuote(prompt?: string, maxLen = 120): string {
     if (!clean) clean = prompt.trim();
     if (!clean) return '';
 
-    // Flatten newlines into a compact single-line or clean preview
-    clean = clean.replace(/\s+/g, ' ');
+    // Normalize Windows linebreaks and collapse excessive blank lines while preserving newlines
+    clean = clean.replace(/\r\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
     if (clean.length > maxLen) {
         clean = clean.slice(0, maxLen - 3) + '...';
     }
 
-    return `<blockquote>${escapeHtml(clean)}</blockquote>\n\n`;
+    return `<blockquote expandable>${escapeHtml(clean)}</blockquote>\n\n`;
 }

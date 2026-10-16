@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { spawn } from 'child_process';
-import { formatShellMessage, handleShellCommand } from '../src/bot/shell';
+import { formatShellMessage, extractTailLines, handleShellCommand } from '../src/bot/shell';
 
 describe('shell execution & formatting', () => {
     describe('formatShellMessage', () => {
@@ -24,6 +24,33 @@ describe('shell execution & formatting', () => {
             const formatted = formatShellMessage('cat big.log', largeOutput, '');
             expect(formatted).toContain('... [output truncated, 15000 chars total] ...');
             expect(formatted.length).toBeLessThan(12000);
+        });
+
+        it('supports tailOnly formatting displaying the last 10 lines', () => {
+            const lines = Array.from({ length: 30 }, (_, i) => `Line ${i + 1}`).join('\n');
+            const formatted = formatShellMessage('long_cmd', lines, '', true);
+            expect(formatted).toContain('... [20 lines above] ...');
+            expect(formatted).toContain('Line 21');
+            expect(formatted).toContain('Line 30');
+            expect(formatted).not.toContain('Line 1\n');
+        });
+    });
+
+    describe('extractTailLines', () => {
+        it('returns all lines when count is under maxLines', () => {
+            const text = 'Line 1\nLine 2\nLine 3';
+            expect(extractTailLines(text, 10)).toBe('Line 1\nLine 2\nLine 3');
+        });
+
+        it('returns (no output) for empty text', () => {
+            expect(extractTailLines('')).toBe('(no output)');
+            expect(extractTailLines('   ')).toBe('(no output)');
+        });
+
+        it('truncates to last N lines with hidden lines indicator', () => {
+            const text = 'A\nB\nC\nD\nE\nF\nG\nH\nI\nJ\nK\nL'; // 12 lines
+            const tail = extractTailLines(text, 5);
+            expect(tail).toBe('... [7 lines above] ...\nH\nI\nJ\nK\nL');
         });
     });
 

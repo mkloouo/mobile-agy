@@ -264,25 +264,32 @@ describe('telegramFormatter', () => {
             expect(formatPromptQuote('   ')).toBe('');
         });
 
-        it('wraps simple prompt in blockquote tags and escapes HTML', () => {
-            expect(formatPromptQuote('Fix <bug> & deploy')).toBe('<blockquote>Fix &lt;bug&gt; &amp; deploy</blockquote>\n\n');
+        it('wraps simple prompt in blockquote expandable tags and escapes HTML', () => {
+            expect(formatPromptQuote('Fix <bug> & deploy')).toBe('<blockquote expandable>Fix &lt;bug&gt; &amp; deploy</blockquote>\n\n');
         });
 
-        it('strips reply context and flattens newlines', () => {
+        it('strips reply context and preserves internal linebreaks', () => {
             const prompt = '[In reply to Alice]:\n"""\nSome previous code\n"""\n\nNow fix the styling\nplease';
-            expect(formatPromptQuote(prompt)).toBe('<blockquote>Now fix the styling please</blockquote>\n\n');
+            expect(formatPromptQuote(prompt)).toBe('<blockquote expandable>Now fix the styling\nplease</blockquote>\n\n');
         });
 
         it('strips attached file tags', () => {
             const prompt = '[Attached user screenshot: /tmp/shot.jpg]\nInspect this log';
-            expect(formatPromptQuote(prompt)).toBe('<blockquote>Inspect this log</blockquote>\n\n');
+            expect(formatPromptQuote(prompt)).toBe('<blockquote expandable>Inspect this log</blockquote>\n\n');
         });
 
         it('truncates prompts exceeding maxLen', () => {
             const longPrompt = 'A'.repeat(150);
             const quote = formatPromptQuote(longPrompt, 50);
             expect(quote).toContain('...');
-            expect(quote).toBe(`<blockquote>${'A'.repeat(47)}...</blockquote>\n\n`);
+            expect(quote).toBe(`<blockquote expandable>${'A'.repeat(47)}...</blockquote>\n\n`);
+        });
+
+        it('supports large prompts up to 800 chars by default without truncating', () => {
+            const prompt500 = 'x'.repeat(500);
+            const quote = formatPromptQuote(prompt500);
+            expect(quote).not.toContain('...');
+            expect(quote).toBe(`<blockquote expandable>${prompt500}</blockquote>\n\n`);
         });
     });
 });

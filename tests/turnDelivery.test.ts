@@ -33,7 +33,7 @@ describe('buildCompletedStatus', () => {
             userPrompt: 'Build the release artifact',
         });
 
-        expect(status.text).toContain('<blockquote>Build the release artifact</blockquote>');
+        expect(status.text).toContain('<blockquote expandable>Build the release artifact</blockquote>');
         expect(status.text).toContain('✓ <b>Completed</b> (10s)');
     });
 });
@@ -47,7 +47,7 @@ describe('buildProgressStatus', () => {
             userPrompt: 'Please update database schema',
         });
 
-        expect(status.text).toContain('<blockquote>Please update database schema</blockquote>');
+        expect(status.text).toContain('<blockquote expandable>Please update database schema</blockquote>');
         expect(status.text).toContain('🧠 <b>Antigravity is working...</b>');
     });
 });
