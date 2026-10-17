@@ -122,6 +122,7 @@ export function registerWorkspaceCommands(services: BotServices): void {
             const threadId = ctx.message?.message_thread_id;
 
             db.bindWorkspace(channelKey, fullPath, threadId);
+            await agyService.restartSession(channelKey);
             await ctx.reply(`✅ Bound this topic to workspace:\n<code>${escapeHtml(fullPath)}</code>`, {
                 parse_mode: 'HTML',
             });

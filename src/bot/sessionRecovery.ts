@@ -149,7 +149,8 @@ export function registerSessionRecovery(services: BotServices): void {
                     state.threadId,
                     rawResponse,
                     isActualError,
-                    result.error || 'Execution failed.'
+                    result.error || 'Execution failed.',
+                    state.workspacePath
                 );
 
                 agyService.markTurnDelivered(channelKey, state.currentTurnId);

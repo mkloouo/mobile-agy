@@ -225,6 +225,7 @@ export function registerBotCallbacks(services: BotServices): void {
                 const channelKey = services.getChannelKey(ctx);
                 db.bindWorkspace(channelKey, wsName);
                 db.deleteSession(channelKey);
+                await services.agyService.restartSession(channelKey);
 
                 await ctx.answerCallbackQuery({ text: `Switched to ${wsName}` });
                 await ctx.editMessageText(

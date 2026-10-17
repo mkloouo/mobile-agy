@@ -146,7 +146,7 @@ export function registerBtwCommand(services: BotServices): void {
                 );
             } catch {}
 
-            await deliverTurnResponse(bot, ctx.chat!.id, threadId, answer, false, '');
+            await deliverTurnResponse(bot, ctx.chat!.id, threadId, answer, false, '', workspacePath);
         } catch (err: any) {
             logger.error('[BTW] Error answering side question:', err);
             try {

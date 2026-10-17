@@ -19,6 +19,7 @@ Enables headless, remote control and real-time streaming of Antigravity tasks wi
   - `mediaGroup.ts` — Telegram photo album / media group batching (loads in batches of 5 before launching turn)
   - `shell.ts` — direct shell command execution (`! <command>`), process group detachment, live output streaming
   - `turnExecutor.ts` — turn lifecycle, status editing, token usage tracking, and rate-limit fallbacks
+  - `fileDelivery.ts` — extracted image, document, and media upload delivery to Telegram with retry & fallback
   - `callbacks.ts` — inline button callback queries (model selection, workspace binding, process kill)
   - `keyboards.ts` — reusable inline keyboards
   - `queue.ts` — persistent queue management across PM2 restarts

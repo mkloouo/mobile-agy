@@ -27,6 +27,7 @@ export interface AppConfig {
     defaultModel?: string;
     dbPath: string;
     idleTimeoutSeconds: number;
+    systemPrompt?: string;
 }
 
 export function getConfigFilePath(): string {
@@ -70,5 +71,6 @@ export function loadConfig(): AppConfig {
         defaultModel: process.env.DEFAULT_MODEL || 'gemini-3.8-flash-medium',
         dbPath,
         idleTimeoutSeconds,
+        systemPrompt: process.env.MOBILE_AGY_SYSTEM_PROMPT || undefined,
     };
 }

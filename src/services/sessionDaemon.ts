@@ -191,10 +191,8 @@ agyProc.stderr?.on('data', (chunk: Buffer) => {
     }
 });
 
-const rlOut = readline.createInterface({
-    input: agyProc.stdout!,
-    crlfDelay: Infinity,
-});
+const rlOut = readline.createInterface({ input: agyProc.stdout!, crlfDelay: Infinity });
+rlOut.on('error', (err) => log('rlOut error:', err.message));
 
 rlOut.on('line', (line) => {
     state.lastActiveAt = Date.now();
@@ -305,10 +303,8 @@ const server = net.createServer((socket) => {
         if (err) connectedClients.delete(socket);
     });
 
-    const rlSocket = readline.createInterface({
-        input: socket,
-        crlfDelay: Infinity,
-    });
+    const rlSocket = readline.createInterface({ input: socket, crlfDelay: Infinity });
+    rlSocket.on('error', (err) => log('rlSocket error:', err.message));
 
     rlSocket.on('line', (line) => {
         const trimmed = line.trim();

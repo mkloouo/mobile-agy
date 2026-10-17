@@ -132,4 +132,33 @@ describe('deliverTurnResponse', () => {
 
         expect(mockSendMessage).not.toHaveBeenCalled();
     });
+
+    it('extracts files and calls sendPhoto/sendDocument during delivery', async () => {
+        const tmpFile = '/tmp/agy_turn_delivery_test.png';
+        const fs = await import('fs');
+        fs.writeFileSync(tmpFile, 'test-data');
+
+        const mockSendMessage = vi.fn().mockResolvedValue({ message_id: 1 });
+        const mockSendPhoto = vi.fn().mockResolvedValue({ message_id: 2 });
+        const bot = { api: { sendMessage: mockSendMessage, sendPhoto: mockSendPhoto } };
+
+        try {
+            await deliverTurnResponse(
+                bot,
+                100,
+                200,
+                `Here is the screenshot: <send_file path="${tmpFile}" caption="Screenshot" />`
+            );
+
+            expect(mockSendMessage).toHaveBeenCalledTimes(1);
+            expect(mockSendMessage).toHaveBeenCalledWith(100, expect.stringContaining('Here is the screenshot:'), expect.any(Object));
+            expect(mockSendPhoto).toHaveBeenCalledTimes(1);
+            expect(mockSendPhoto).toHaveBeenCalledWith(100, expect.any(Object), {
+                caption: 'Screenshot',
+                message_thread_id: 200,
+            });
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
 });

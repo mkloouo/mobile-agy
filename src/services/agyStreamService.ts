@@ -1,18 +1,9 @@
 import net from 'net';
 import fs from 'fs';
 import { logger } from '../utils/logger';
-import {
-    SessionPaths,
-    getSessionPaths,
-    tryConnectSocket,
-    waitForSocket,
-    launchDaemonProcess,
-} from './agyDaemonLauncher';
+import { SessionPaths, getSessionPaths, tryConnectSocket, waitForSocket, launchDaemonProcess } from './agyDaemonLauncher';
 import { scanAndRecoverSessions } from './agyRecoveryScanner';
-import {
-    ActiveSocketSession,
-    createSocketSession,
-} from './agySessionSocket';
+import { ActiveSocketSession, createSocketSession } from './agySessionSocket';
 import { generateTurnId } from './sessionDaemonUtils';
 import { getDatabase } from '../database/db';
 
@@ -139,13 +130,9 @@ export class AgyStreamService {
         const paths = getSessionPaths(sessionId);
         if (fs.existsSync(paths.socketPath)) {
             const socket = net.createConnection(paths.socketPath, () => {
-                socket.write(JSON.stringify({ action: 'stop' }) + '\n', () => {
-                    socket.destroy();
-                });
+                socket.write(JSON.stringify({ action: 'stop' }) + '\n', () => socket.destroy());
             });
-            socket.once('error', () => {
-                socket.destroy();
-            });
+            socket.once('error', () => socket.destroy());
         }
 
         return true;
@@ -172,10 +159,28 @@ export class AgyStreamService {
             }
         } catch {}
 
+        if (!daemonPid || !agyPid) {
+            try {
+                const dbSession = getDatabase().getDaemonSession(sessionId);
+                daemonPid = daemonPid || dbSession?.daemonPid;
+                agyPid = agyPid || dbSession?.agyPid;
+            } catch {}
+        }
+
         if (inMem) {
             if (inMem.safetyTimer) {
                 clearTimeout(inMem.safetyTimer);
                 inMem.safetyTimer = null;
+            }
+            if (inMem.currentResolve) {
+                inMem.currentResolve({
+                    status: 'STOPPED',
+                    response: inMem.accumulatedText || '⚠️ Task was stopped.',
+                    durationSeconds: 0,
+                    conversationId: inMem.currentConvId,
+                });
+                inMem.currentResolve = undefined;
+                inMem.currentReject = undefined;
             }
             try {
                 inMem.socket.write(JSON.stringify({ action: 'shutdown' }) + '\n');
@@ -184,24 +189,36 @@ export class AgyStreamService {
             this.sessions.delete(sessionId);
         }
 
-        await new Promise((r) => setTimeout(r, 200));
+        if (!inMem && fs.existsSync(paths.socketPath)) {
+            try {
+                const socket = net.createConnection(paths.socketPath, () => {
+                    socket.write(JSON.stringify({ action: 'shutdown' }) + '\n', () => socket.destroy());
+                });
+                socket.once('error', () => { socket.destroy(); });
+            } catch {}
+        }
+
+        await new Promise((r) => setTimeout(r, 100));
 
         if (agyPid) {
             try { process.kill(agyPid, 'SIGTERM'); } catch {}
         }
         if (daemonPid) {
             try { process.kill(daemonPid, 'SIGTERM'); } catch {}
-            setTimeout(() => {
-                try { process.kill(daemonPid!, 'SIGKILL'); } catch {}
-            }, 300);
+            for (let i = 0; i < 6; i++) {
+                try {
+                    process.kill(daemonPid, 0);
+                    await new Promise((r) => setTimeout(r, 50));
+                } catch {
+                    break;
+                }
+            }
+            try { process.kill(daemonPid, 'SIGKILL'); } catch {}
         }
 
-        try {
-            if (fs.existsSync(paths.socketPath)) fs.unlinkSync(paths.socketPath);
-        } catch {}
-        try {
-            if (fs.existsSync(paths.statePath)) fs.unlinkSync(paths.statePath);
-        } catch {}
+        try { if (fs.existsSync(paths.socketPath)) fs.unlinkSync(paths.socketPath); } catch {}
+        try { if (fs.existsSync(paths.statePath)) fs.unlinkSync(paths.statePath); } catch {}
+        try { getDatabase().deleteDaemonSession(sessionId); } catch {}
 
         return true;
     }
@@ -301,10 +318,8 @@ export class AgyStreamService {
         if (inMem && !inMem.socket.destroyed) {
             const sameWorkspace = inMem.workspacePath === options.workspacePath;
             const sameModel = !options.model || inMem.model === options.model;
-            if (sameWorkspace && sameModel) {
-                return inMem;
-            }
-            this.stopSession(sessionId);
+            if (sameWorkspace && sameModel) return inMem;
+            await this.restartSession(sessionId);
         }
 
         // 2. Try connecting to existing Unix Domain Socket
@@ -330,7 +345,7 @@ export class AgyStreamService {
             }
 
             existingSocket.destroy();
-            this.stopSession(sessionId);
+            await this.restartSession(sessionId);
         }
 
         // 3. Socket not running: launch detached sessionDaemon

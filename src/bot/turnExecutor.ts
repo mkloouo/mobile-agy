@@ -2,6 +2,7 @@ import { BotServices } from './types';
 import { presentQuestion, findRecentAskQuestion } from './questionHandler';
 import { describeToolAction, escapeHtml } from '../utils/telegramFormatter';
 import { buildProgressStatus, buildCompletedStatus, deliverTurnResponse, isActualTurnError } from './turnDelivery';
+import { buildInitialSessionPrompt } from './systemPrompt';
 import { logger } from '../utils/logger';
 
 export { registerSessionRecovery } from './sessionRecovery';
@@ -70,10 +71,15 @@ export async function executeTurnWithStatus(
     try {
         const session = db.getSession(channelKey);
         const selectedModel = db.getModel(channelKey) || session?.selectedModel || config.defaultModel;
+        const isFreshSession = !session?.conversationId;
+        const promptToSend = isFreshSession
+            ? buildInitialSessionPrompt(userPrompt, config.systemPrompt)
+            : userPrompt;
+
         const result = await agyService.executeTurn(channelKey, {
             workspacePath,
             conversationId: session?.conversationId,
-            prompt: userPrompt,
+            prompt: promptToSend,
             autoApprove: config.autoApprove,
             model: selectedModel,
             chatId,
@@ -158,7 +164,8 @@ export async function executeTurnWithStatus(
             threadId,
             rawResponse,
             isActualError,
-            result.error || 'Antigravity execution failed.'
+            result.error || 'Antigravity execution failed.',
+            workspacePath
         );
 
         agyService.markTurnDelivered(channelKey);

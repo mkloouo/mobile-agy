@@ -14,6 +14,7 @@ import {
 } from '../utils/telegramFormatter';
 import { logger } from '../utils/logger';
 import { formatDuration } from '../utils/dateFormatter';
+import { extractFilesToSend, deliverFiles } from './fileDelivery';
 
 export interface ProgressStatusOptions {
     channelKey: string;
@@ -168,40 +169,48 @@ export async function deliverTurnResponse(
     threadId: number | undefined,
     rawResponse: string,
     isError: boolean = false,
-    errorMessage?: string
+    errorMessage?: string,
+    workspacePath?: string
 ): Promise<void> {
-    const cleanResponse = cleanModelResponse((rawResponse || '').trim());
-    if (!cleanResponse && !errorMessage) return;
+    const { files, cleanedResponse } = extractFilesToSend(rawResponse, workspacePath);
+    const cleanResponse = cleanModelResponse((cleanedResponse || '').trim());
+    if (!cleanResponse && !errorMessage && files.length === 0) return;
 
-    const formatted = isError
-        ? `❌ <b>Error:</b>\n${escapeHtml(cleanResponse || errorMessage || 'Antigravity execution failed.')}`
-        : formatForTelegram(cleanResponse);
+    if (cleanResponse || errorMessage) {
+        const formatted = isError
+            ? `❌ <b>Error:</b>\n${escapeHtml(cleanResponse || errorMessage || 'Antigravity execution failed.')}`
+            : formatForTelegram(cleanResponse);
 
-    const chunks = splitTelegramHtml(formatted);
-    for (let i = 0; i < chunks.length; i++) {
-        const chunk = chunks[i];
-        if (i > 0) {
-            // Prevent rapid-fire Telegram message bursts between chunks
-            await new Promise((r) => setTimeout(r, 250));
-        }
+        const chunks = splitTelegramHtml(formatted);
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            if (i > 0) {
+                // Prevent rapid-fire Telegram message bursts between chunks
+                await new Promise((r) => setTimeout(r, 250));
+            }
 
-        try {
-            await sendWithRetry(bot, chatId, chunk, {
-                parse_mode: 'HTML',
-                message_thread_id: threadId,
-            });
-        } catch (replyErr: any) {
-            logger.warn(`[Bot] HTML delivery failed on sendMessage (${replyErr.message}), falling back to plain text`);
             try {
-                await sendWithRetry(
-                    bot,
-                    chatId,
-                    decodeHtmlEntities(chunk.replace(/<[^>]+>/g, '')).slice(0, 4000),
-                    { message_thread_id: threadId }
-                );
-            } catch (fallbackErr: any) {
-                logger.error('[Bot] Plain text fallback also failed:', fallbackErr);
+                await sendWithRetry(bot, chatId, chunk, {
+                    parse_mode: 'HTML',
+                    message_thread_id: threadId,
+                });
+            } catch (replyErr: any) {
+                logger.warn(`[Bot] HTML delivery failed on sendMessage (${replyErr.message}), falling back to plain text`);
+                try {
+                    await sendWithRetry(
+                        bot,
+                        chatId,
+                        decodeHtmlEntities(chunk.replace(/<[^>]+>/g, '')).slice(0, 4000),
+                        { message_thread_id: threadId }
+                    );
+                } catch (fallbackErr: any) {
+                    logger.error('[Bot] Plain text fallback also failed:', fallbackErr);
+                }
             }
         }
+    }
+
+    if (files.length > 0 && !isError) {
+        await deliverFiles(bot, chatId, threadId, files);
     }
 }

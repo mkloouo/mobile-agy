@@ -156,7 +156,7 @@ export function registerBotCommands(services: BotServices): void {
     // Command: /agy_clear, /agy_reset, /clear, /reset
     bot.command(['agy_clear', 'agy_reset', 'clear', 'reset'], async (ctx) => {
         const channelKey = services.getChannelKey(ctx);
-        agyService.stopSession(channelKey);
+        await agyService.restartSession(channelKey);
         db.deleteSession(channelKey);
 
         await ctx.reply(
